@@ -125,6 +125,32 @@ function feedpublisher_parse($xml)
     }));
 }
 
+function feedpublisher_normalize_item_identity($identity)
+{
+    $identity = preg_replace('/\s+/u', ' ', trim((string) $identity));
+    $parts = parse_url($identity);
+    if (!$parts || empty($parts['scheme']) || empty($parts['host'])
+        || !in_array(strtolower($parts['scheme']), array('http', 'https'), true)) {
+        return $identity;
+    }
+
+    $scheme = strtolower($parts['scheme']);
+    $host = strtolower($parts['host']);
+    $port = isset($parts['port']) && !(($scheme === 'http' && $parts['port'] === 80)
+        || ($scheme === 'https' && $parts['port'] === 443))
+        ? ':' . $parts['port']
+        : '';
+    $path = isset($parts['path']) && $parts['path'] !== '' ? $parts['path'] : '/';
+    $query = isset($parts['query']) && $parts['query'] !== '' ? '?' . $parts['query'] : '';
+
+    return $scheme . '://' . $host . $port . $path . $query;
+}
+
+function feedpublisher_item_key($identity)
+{
+    return hash('sha256', feedpublisher_normalize_item_identity($identity));
+}
+
 function feedpublisher_html_to_mycode($html)
 {
     $html = preg_replace('#<(script|style|iframe|object|embed|form)[^>]*>.*?</\\1>#is', '', $html);

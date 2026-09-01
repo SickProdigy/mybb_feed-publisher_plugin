@@ -15,7 +15,7 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
     $state = $state === 'skipped' ? 'skipped' : 'queued';
 
     $feedId = (int) $feed['id'];
-    $itemKey = hash('sha256', $item['key']);
+    $itemKey = feedpublisher_item_key($item['key']);
     $condition = "feed_id={$feedId} AND item_key='" . $db->escape_string($itemKey) . "'";
     $existing = $db->fetch_field($db->simple_select(
         'feedpublisher_queue',
@@ -68,7 +68,7 @@ function feedpublisher_queue_counts($feedId)
 {
     global $db;
 
-    $counts = array('queued' => 0, 'processing' => 0, 'published' => 0, 'failed' => 0, 'skipped' => 0);
+    $counts = array('queued' => 0, 'processing' => 0, 'published' => 0, 'failed' => 0, 'skipped' => 0, 'uncertain' => 0);
     $query = $db->simple_select(
         'feedpublisher_queue',
         'state, COUNT(id) AS total',
@@ -146,6 +146,16 @@ function feedpublisher_queue_complete($feed, $item, $tid, $pid)
 
     $id = (int) $item['id'];
     $token = $db->escape_string($item['claim_token']);
+    $db->update_query('feedpublisher_items', array(
+        'source_url' => $db->escape_string($item['source_url']),
+        'tid' => (int) $tid,
+        'pid' => (int) $pid,
+        'imported_at' => TIME_NOW,
+    ), 'feed_id=' . (int) $feed['id'] . " AND item_key='" . $db->escape_string($item['item_key']) . "'");
+    if ($db->affected_rows() !== 1) {
+        throw new RuntimeException('The publication reservation could not be finalized.');
+    }
+
     $db->update_query('feedpublisher_queue', array(
         'state' => 'published',
         'claim_token' => '',
@@ -156,18 +166,46 @@ function feedpublisher_queue_complete($feed, $item, $tid, $pid)
         'published_at' => TIME_NOW,
     ), "id={$id} AND state='processing' AND claim_token='{$token}'");
     if ($db->affected_rows() !== 1) {
-        throw new RuntimeException('The queue claim was lost before publication could be recorded.');
+        throw new RuntimeException('The queue claim was lost after publication; the imported-item record was preserved.');
     }
-
-    $db->insert_query('feedpublisher_items', array(
-        'feed_id' => (int) $feed['id'],
-        'item_key' => $db->escape_string($item['item_key']),
-        'source_url' => $db->escape_string($item['source_url']),
-        'tid' => (int) $tid,
-        'pid' => (int) $pid,
-        'imported_at' => TIME_NOW,
-    ));
     $db->update_query('feedpublisher_feeds', array('last_published' => TIME_NOW), 'id=' . (int) $feed['id']);
+}
+
+function feedpublisher_queue_reserve($feed, $item)
+{
+    global $db;
+
+    $feedId = (int) $feed['id'];
+    $itemKey = $db->escape_string($item['item_key']);
+    $db->write_query(
+        'INSERT IGNORE INTO ' . TABLE_PREFIX . 'feedpublisher_items'
+        . ' (feed_id, item_key, source_url, tid, pid, imported_at) VALUES ('
+        . $feedId . ", '" . $itemKey . "', '" . $db->escape_string($item['source_url']) . "', 0, 0, 0)"
+    );
+    return $db->affected_rows() === 1;
+}
+
+function feedpublisher_queue_release_reservation($feed, $item)
+{
+    global $db;
+
+    $db->delete_query(
+        'feedpublisher_items',
+        'feed_id=' . (int) $feed['id'] . " AND item_key='" . $db->escape_string($item['item_key'])
+        . "' AND tid=0 AND pid=0 AND imported_at=0"
+    );
+}
+
+function feedpublisher_queue_mark_uncertain($item)
+{
+    global $db;
+
+    $db->update_query('feedpublisher_queue', array(
+        'state' => 'uncertain',
+        'claim_token' => '',
+        'claimed_at' => 0,
+        'last_error' => 'A previous publication was interrupted after reservation; review MyBB before retrying.',
+    ), 'id=' . (int) $item['id'] . " AND state='processing'");
 }
 
 function feedpublisher_queue_fail($item, $message, $retryDelay = 300)
@@ -189,6 +227,12 @@ function feedpublisher_queue_dispatch($feed, $publisher)
 {
     $result = array('published' => 0, 'failed' => 0);
     foreach (feedpublisher_queue_claim_due($feed) as $item) {
+        if (!feedpublisher_queue_reserve($feed, $item)) {
+            feedpublisher_queue_mark_uncertain($item);
+            ++$result['failed'];
+            continue;
+        }
+        $publication = null;
         try {
             $publication = call_user_func($publisher, $feed, $item);
             if (!is_array($publication) || empty($publication['tid']) || empty($publication['pid'])) {
@@ -197,7 +241,12 @@ function feedpublisher_queue_dispatch($feed, $publisher)
             feedpublisher_queue_complete($feed, $item, $publication['tid'], $publication['pid']);
             ++$result['published'];
         } catch (Throwable $exception) {
-            feedpublisher_queue_fail($item, $exception->getMessage());
+            if (is_array($publication) && !empty($publication['tid']) && !empty($publication['pid'])) {
+                feedpublisher_queue_mark_uncertain($item);
+            } else {
+                feedpublisher_queue_release_reservation($feed, $item);
+                feedpublisher_queue_fail($item, $exception->getMessage());
+            }
             ++$result['failed'];
         }
     }

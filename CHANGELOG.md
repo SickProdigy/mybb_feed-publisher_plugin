@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.5 - 2026-09-01
+
+- Normalize GUID and canonical-link identities before deriving stable item keys.
+- Reserve each item durably before MyBB publication so concurrent or stale task
+  runs cannot publish the same entry twice.
+- Release reservations after ordinary failures so they remain retryable, while
+  interrupted reservations are surfaced as uncertain for administrator review.
+- Show uncertain publication outcomes separately in ACP queue status.
+
 ## 0.1.4 - 2026-09-01
 
 - Publish due queue entries as MyBB threads through the official post data

@@ -43,6 +43,12 @@ ordering preference. Due queue entries are published as threads by the configure
 MyBB user after the destination forum and effective posting permissions are
 validated at runtime.
 
+Each feed is limited to 1,000 active queued, processing, or failed entries.
+Published queue rows are retained for 90 days; the permanent imported-item
+record remains for deduplication. If a task is interrupted after reserving an
+item, the entry is marked **uncertain** instead of being automatically published
+again. Review the destination forum before manually resolving such an entry.
+
 ## Security model
 
 Feed content is converted to MyCode rather than posted as trusted HTML. Feed

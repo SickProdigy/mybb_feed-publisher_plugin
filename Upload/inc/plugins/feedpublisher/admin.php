@@ -86,7 +86,8 @@ function feedpublisher_admin_list()
         $id = (int) $feed['id'];
         $counts = feedpublisher_queue_counts($id);
         $queueStatus = 'Queued: ' . $counts['queued'] . '<br>Processing: ' . $counts['processing']
-            . '<br>Published: ' . $counts['published'] . '<br>Skipped: ' . $counts['skipped'] . '<br>Failed: ' . $counts['failed'];
+            . '<br>Published: ' . $counts['published'] . '<br>Skipped: ' . $counts['skipped']
+            . '<br>Failed: ' . $counts['failed'] . '<br>Uncertain: ' . $counts['uncertain'];
         $initialStatus = empty($feed['initialized_at'])
             ? 'Initial scan pending (' . htmlspecialchars_uni($feed['initial_policy']) . ')'
             : 'Initial scan: ' . my_date('relative', (int) $feed['initialized_at']) . ' (' . htmlspecialchars_uni($feed['initial_policy']) . ')';
