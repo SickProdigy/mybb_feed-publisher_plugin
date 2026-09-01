@@ -19,7 +19,7 @@ function feedpublisher_info()
     return array(
         'name' => 'Feed Publisher',
         'description' => 'Imports RSS and Atom entries as safe MyBB posts.',
-        'website' => '',
+        'website' => 'https://www.sickgaming.net',
         'author' => 'SickProdigy',
         'authorsite' => 'https://www.sickgaming.net',
         'version' => '0.1.11',
