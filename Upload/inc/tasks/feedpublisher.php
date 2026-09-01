@@ -27,7 +27,9 @@ function task_feedpublisher($task)
         ++$totals['feeds'];
         feedpublisher_queue_prune((int) $feed['id']);
         $discoveryInterval = max(5, (int) $feed['interval_minutes']) * 60;
-        $discoveryDue = (int) $feed['last_checked'] <= TIME_NOW - $discoveryInterval;
+        $discoveryDue = (int) $feed['fetch_failures'] > 0
+            ? (int) $feed['next_fetch_at'] <= TIME_NOW
+            : (int) $feed['last_checked'] <= TIME_NOW - $discoveryInterval;
 
         if ($discoveryDue) {
             try {
@@ -52,6 +54,8 @@ function task_feedpublisher($task)
                 }
                 $feedUpdate = array(
                     'last_checked' => TIME_NOW,
+                    'fetch_failures' => 0,
+                    'next_fetch_at' => 0,
                     'last_error' => '',
                 );
                 if ($initializing && $initialComplete) {
@@ -60,12 +64,18 @@ function task_feedpublisher($task)
                 }
                 $db->update_query('feedpublisher_feeds', $feedUpdate, 'id=' . (int) $feed['id']);
             } catch (Throwable $exception) {
-                $message = substr($exception->getMessage(), 0, 1000);
+                $failures = min(10, (int) $feed['fetch_failures'] + 1);
+                $retryDelay = min(21600, 300 * (2 ** min(6, $failures - 1)));
+                $stage = $exception instanceof FeedPublisherException ? $exception->getStage() : 'discovery';
+                $message = feedpublisher_safe_log_text($exception->getMessage());
                 $db->update_query('feedpublisher_feeds', array(
                     'last_checked' => TIME_NOW,
+                    'fetch_failures' => $failures,
+                    'next_fetch_at' => TIME_NOW + $retryDelay,
                     'last_error' => $db->escape_string($message),
                 ), 'id=' . (int) $feed['id']);
-                $errors[] = $feed['name'] . ' discovery: ' . $message;
+                $errors[] = feedpublisher_safe_log_text($feed['name']) . ' ' . $stage . ': ' . $message
+                    . ' (retry in ' . (int) ceil($retryDelay / 60) . ' minutes)';
             }
         }
 

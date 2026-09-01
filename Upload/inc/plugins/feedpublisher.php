@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => '',
         'author' => 'SickProdigy',
         'authorsite' => '',
-        'version' => '0.1.7',
+        'version' => '0.1.8',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -65,6 +65,8 @@ function feedpublisher_install()
             `strip_selectors` text NULL,
             `strip_regexes` text NULL,
             `last_checked` int unsigned NOT NULL DEFAULT 0,
+            `fetch_failures` tinyint unsigned NOT NULL DEFAULT 0,
+            `next_fetch_at` int unsigned NOT NULL DEFAULT 0,
             `last_published` int unsigned NOT NULL DEFAULT 0,
             `last_error` text NULL,
             PRIMARY KEY (`id`),
@@ -111,6 +113,8 @@ function feedpublisher_upgrade_schema()
         'remove_bylines' => "tinyint(1) NOT NULL DEFAULT 0 AFTER attribution_mode",
         'remove_source_links' => "tinyint(1) NOT NULL DEFAULT 0 AFTER remove_bylines",
         'strip_regexes' => "text NULL AFTER strip_selectors",
+        'fetch_failures' => "tinyint unsigned NOT NULL DEFAULT 0 AFTER last_checked",
+        'next_fetch_at' => "int unsigned NOT NULL DEFAULT 0 AFTER fetch_failures",
         'last_published' => "int unsigned NOT NULL DEFAULT 0 AFTER `last_checked`",
     );
     foreach ($columns as $name => $definition) {

@@ -9,55 +9,103 @@ if (!defined('IN_MYBB')) {
     die('Direct access is not allowed.');
 }
 
-function feedpublisher_validate_url($url)
+class FeedPublisherException extends RuntimeException
+{
+    private $stage;
+
+    public function __construct($stage, $message)
+    {
+        $this->stage = $stage;
+        parent::__construct($message);
+    }
+
+    public function getStage()
+    {
+        return $this->stage;
+    }
+}
+
+function feedpublisher_safe_log_text($text)
+{
+    $text = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) $text);
+    $text = preg_replace('/\s+/u', ' ', trim($text));
+    return substr($text, 0, 1000);
+}
+
+function feedpublisher_resolve_url($url)
 {
     $parts = parse_url($url);
-    if (!$parts || empty($parts['host']) || empty($parts['scheme'])) {
-        return false;
+    if (!$parts || empty($parts['host']) || empty($parts['scheme'])
+        || !in_array(strtolower($parts['scheme']), array('http', 'https'), true)
+        || isset($parts['user']) || isset($parts['pass'])) {
+        throw new FeedPublisherException('validation', 'The feed URL must be a public HTTP or HTTPS URL without credentials.');
     }
 
-    if (!in_array(strtolower($parts['scheme']), array('http', 'https'), true)) {
-        return false;
-    }
-
-    if (isset($parts['user']) || isset($parts['pass'])) {
-        return false;
-    }
-
-    $addresses = gethostbynamel($parts['host']);
-    if (!$addresses) {
-        return false;
-    }
-
-    foreach ($addresses as $address) {
-        if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
-            return false;
+    $host = trim($parts['host'], '[]');
+    $parts['host'] = $host;
+    $addresses = array();
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        $addresses[] = $host;
+    } else {
+        foreach (@dns_get_record($host, DNS_A | DNS_AAAA) ?: array() as $record) {
+            if (!empty($record['ip'])) {
+                $addresses[] = $record['ip'];
+            } elseif (!empty($record['ipv6'])) {
+                $addresses[] = $record['ipv6'];
+            }
         }
     }
+    $addresses = array_values(array_unique($addresses));
+    if (!$addresses) {
+        throw new FeedPublisherException('dns', 'The feed hostname did not resolve.');
+    }
+    foreach ($addresses as $address) {
+        if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            throw new FeedPublisherException('dns', 'The feed hostname resolves to a disallowed address.');
+        }
+    }
+    return array('parts' => $parts, 'addresses' => $addresses);
+}
 
-    return true;
+function feedpublisher_validate_url($url)
+{
+    try {
+        feedpublisher_resolve_url($url);
+        return true;
+    } catch (FeedPublisherException $exception) {
+        return false;
+    }
 }
 
 function feedpublisher_fetch($url, $maxBytes = 2097152)
 {
-    if (!feedpublisher_validate_url($url)) {
-        throw new RuntimeException('The feed URL is invalid or resolves to a non-public address.');
-    }
-
     if (!function_exists('curl_init')) {
-        throw new RuntimeException('The PHP cURL extension is required.');
+        throw new FeedPublisherException('fetch', 'The PHP cURL extension is required.');
     }
+    $resolved = feedpublisher_resolve_url($url);
+    $parts = $resolved['parts'];
+    $scheme = strtolower($parts['scheme']);
+    $port = isset($parts['port']) ? (int) $parts['port'] : ($scheme === 'https' ? 443 : 80);
+    $address = $resolved['addresses'][0];
+    $pinned = strpos($address, ':') !== false ? '[' . $address . ']' : $address;
 
     $body = '';
+    $tooLarge = false;
     $curl = curl_init($url);
     curl_setopt_array($curl, array(
         CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
         CURLOPT_CONNECTTIMEOUT => 5,
         CURLOPT_TIMEOUT => 15,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_RESOLVE => array($parts['host'] . ':' . $port . ':' . $pinned),
         CURLOPT_USERAGENT => 'MyBB Feed Publisher/0.1',
         CURLOPT_HTTPHEADER => array('Accept: application/rss+xml, application/atom+xml, application/xml, text/xml'),
-        CURLOPT_WRITEFUNCTION => function ($handle, $chunk) use (&$body, $maxBytes) {
+        CURLOPT_WRITEFUNCTION => function ($handle, $chunk) use (&$body, &$tooLarge, $maxBytes) {
             if (strlen($body) + strlen($chunk) > $maxBytes) {
+                $tooLarge = true;
                 return 0;
             }
             $body .= $chunk;
@@ -67,11 +115,22 @@ function feedpublisher_fetch($url, $maxBytes = 2097152)
 
     $ok = curl_exec($curl);
     $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+    $contentType = strtolower(trim((string) curl_getinfo($curl, CURLINFO_CONTENT_TYPE)));
     $error = curl_error($curl);
     curl_close($curl);
 
+    if ($tooLarge) {
+        throw new FeedPublisherException('fetch', 'The feed response exceeded the 2 MiB size limit.');
+    }
+    if ($status >= 300 && $status < 400) {
+        throw new FeedPublisherException('fetch', 'Feed redirects are not allowed.');
+    }
     if ($ok === false || $status < 200 || $status >= 300) {
-        throw new RuntimeException('Feed request failed' . ($error ? ': ' . $error : ' with HTTP ' . $status) . '.');
+        throw new FeedPublisherException('fetch', 'The feed request failed' . ($error ? ': ' . $error : ' with HTTP ' . $status) . '.');
+    }
+    $mediaType = trim(strtok($contentType, ';'));
+    if (!in_array($mediaType, array('application/rss+xml', 'application/atom+xml', 'application/xml', 'text/xml'), true)) {
+        throw new FeedPublisherException('content-type', 'The feed response did not use an accepted XML content type.');
     }
 
     return $body;
@@ -79,13 +138,24 @@ function feedpublisher_fetch($url, $maxBytes = 2097152)
 
 function feedpublisher_parse($xml)
 {
+    if (strlen($xml) > 2097152) {
+        throw new FeedPublisherException('parse', 'The XML document exceeded the 2 MiB size limit.');
+    }
+    if (stripos($xml, '<!DOCTYPE') !== false) {
+        throw new FeedPublisherException('parse', 'XML document type declarations are not allowed.');
+    }
     $previous = libxml_use_internal_errors(true);
     $document = simplexml_load_string($xml, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA);
     libxml_clear_errors();
     libxml_use_internal_errors($previous);
 
     if ($document === false) {
-        throw new RuntimeException('The response is not valid XML.');
+        throw new FeedPublisherException('parse', 'The response is not valid XML.');
+    }
+    $nodeCount = 0;
+    $rootNode = dom_import_simplexml($document);
+    if (!$rootNode || !feedpublisher_xml_within_limits($rootNode, 0, $nodeCount)) {
+        throw new FeedPublisherException('parse', 'The XML structure exceeded the depth or node limit.');
     }
 
     $items = array();
@@ -120,9 +190,27 @@ function feedpublisher_parse($xml)
         }
     }
 
-    return array_values(array_filter($items, function ($item) {
+    $items = array_values(array_filter($items, function ($item) {
         return $item['key'] !== '' && $item['title'] !== '';
     }));
+    if (count($items) > 1000) {
+        throw new FeedPublisherException('parse', 'The feed contains more than 1,000 entries.');
+    }
+    return $items;
+}
+
+function feedpublisher_xml_within_limits(DOMNode $node, $depth, &$nodeCount)
+{
+    if ($depth > 64 || ++$nodeCount > 20000) {
+        return false;
+    }
+    foreach ($node->childNodes as $child) {
+        if ($child->nodeType === XML_ELEMENT_NODE
+            && !feedpublisher_xml_within_limits($child, $depth + 1, $nodeCount)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 function feedpublisher_normalize_item_identity($identity)

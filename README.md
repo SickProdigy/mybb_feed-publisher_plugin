@@ -62,7 +62,10 @@ again. Review the destination forum before manually resolving such an entry.
 
 Feed content is converted to MyCode rather than posted as trusted HTML. Feed
 URLs must use HTTP or HTTPS. Requests to loopback, private, reserved, and
-link-local IP addresses are rejected to reduce SSRF risk.
+link-local IP addresses are rejected to reduce SSRF risk. The validated address
+is pinned for the connection, redirects are rejected, XML response types are
+required, and responses are capped at 2 MiB. Failed discovery uses persistent
+exponential backoff from 5 minutes up to 6 hours.
 
 ## License
 

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.8 - 2026-09-01
+
+- Resolve and validate every feed address, then pin cURL to a validated public
+  target to prevent DNS changes between validation and connection.
+- Explicitly reject redirects and unexpected response MIME types while retaining
+  strict connection, request, and response-size limits.
+- Reject document types and excessively large or deep feed structures.
+- Add persistent bounded exponential discovery backoff and stage-specific,
+  control-character-safe task errors.
+
 ## 0.1.7 - 2026-09-01
 
 - Add a direct dry-run preview for every saved feed and retain the form preview
