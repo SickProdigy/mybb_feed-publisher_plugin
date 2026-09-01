@@ -145,6 +145,9 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'uid' => 0,
         'title_prefix' => '',
         'thread_prefix_id' => 0,
+        'thread_date_mode' => 'publish',
+        'future_date_policy' => 'hold',
+        'schedule_jitter_minutes' => 0,
         'enabled' => 0,
         'interval_minutes' => 60,
         'publish_interval_minutes' => 60,
@@ -202,6 +205,9 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->output_row('Title prefix text', 'Optional text added to the beginning of every generated title, such as [RSS] or Freebie:.', $form->generate_text_box('title_prefix', $values['title_prefix'], array('maxlength' => 40)));
     $container->output_row('MyBB thread prefix', 'Optional built-in styled prefix available to the selected posting user in the destination forum.', $form->generate_select_box('thread_prefix_id', $prefixOptions, $selectedPrefixId)
         . ' <input type="submit" class="button" name="refresh_prefixes" value="Refresh prefix choices" style="display:none">');
+    $container->output_row('Thread date', 'Choose whether MyBB shows when Feed Publisher created the thread or the valid publication date supplied by the feed.', $form->generate_select_box('thread_date_mode', array('publish' => 'Time posted to MyBB', 'source' => 'Original feed publication time'), $values['thread_date_mode']));
+    $container->output_row('Future-dated entries', 'Choose what happens when a feed says an entry is scheduled for a future time.', $form->generate_select_box('future_date_policy', array('hold' => 'Hold until that time', 'clamp' => 'Publish normally using the current time', 'skip' => 'Mark as seen; do not publish', 'reject' => 'Reject permanently'), $values['future_date_policy']));
+    $container->output_row('Scheduling spread', 'Optionally delay newly queued entries by a repeatable 0 to this many minutes (maximum 60). Normal publication pacing still applies.', $form->generate_numeric_field('schedule_jitter_minutes', (int) $values['schedule_jitter_minutes'], array('min' => 0, 'max' => 60)));
     $container->output_row('Source attribution <em>*</em>', 'Append a source link to every imported thread. Keeping attribution enabled is recommended.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
     $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent queues one; recent count queues a bounded number; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only', 'recent' => 'Recent count', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
     $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
@@ -244,6 +250,9 @@ function feedpublisher_admin_save()
         'uid' => $mybb->get_input('uid', MyBB::INPUT_INT),
         'title_prefix' => $mybb->get_input('title_prefix'),
         'thread_prefix_id' => $mybb->get_input('thread_prefix_id', MyBB::INPUT_INT),
+        'thread_date_mode' => $mybb->get_input('thread_date_mode'),
+        'future_date_policy' => $mybb->get_input('future_date_policy'),
+        'schedule_jitter_minutes' => $mybb->get_input('schedule_jitter_minutes', MyBB::INPUT_INT),
         'interval_minutes' => $mybb->get_input('interval_minutes', MyBB::INPUT_INT),
         'publish_interval_minutes' => $mybb->get_input('publish_interval_minutes', MyBB::INPUT_INT),
         'max_posts_per_run' => $mybb->get_input('max_posts_per_run', MyBB::INPUT_INT),
@@ -287,6 +296,15 @@ function feedpublisher_admin_save()
     $postingUser = get_user($values['uid']);
     if ($values['thread_prefix_id'] && !feedpublisher_thread_prefix_is_available($values['thread_prefix_id'], $values['fid'], $postingUser)) {
         $errors[] = 'Select a MyBB thread prefix available to the posting user in the destination forum.';
+    }
+    if (!in_array($values['thread_date_mode'], array('publish', 'source'), true)) {
+        $errors[] = 'Select a valid thread date option.';
+    }
+    if (!in_array($values['future_date_policy'], array('hold', 'clamp', 'skip', 'reject'), true)) {
+        $errors[] = 'Select a valid future-date policy.';
+    }
+    if ($values['schedule_jitter_minutes'] < 0 || $values['schedule_jitter_minutes'] > 60) {
+        $errors[] = 'Scheduling spread must be between 0 and 60 minutes.';
     }
     if ($values['interval_minutes'] < 5 || $values['interval_minutes'] > 10080) {
         $errors[] = 'The import interval must be between 5 and 10080 minutes.';
@@ -347,6 +365,9 @@ function feedpublisher_admin_save()
         'uid' => $values['uid'],
         'title_prefix' => $db->escape_string($values['title_prefix']),
         'thread_prefix_id' => $values['thread_prefix_id'],
+        'thread_date_mode' => $db->escape_string($values['thread_date_mode']),
+        'future_date_policy' => $db->escape_string($values['future_date_policy']),
+        'schedule_jitter_minutes' => $values['schedule_jitter_minutes'],
         'enabled' => $values['enabled'],
         'interval_minutes' => $values['interval_minutes'],
         'publish_interval_minutes' => $values['publish_interval_minutes'],
@@ -451,8 +472,17 @@ function feedpublisher_admin_initial_preview($values)
         . ' &middot; <strong>Previewed entries:</strong> ' . min(100, count($plan)) . '</div>';
     foreach (array_slice($plan, 0, 100) as $index => $entry) {
         $item = $entry['item'];
+        $datePlan = isset($entry['date_plan']) ? $entry['date_plan'] : feedpublisher_source_date_plan($values, $item);
         $willPublish = $entry['state'] === 'queued';
-        $action = $willPublish ? 'Queue for paced publishing' : 'Mark as seen; do not publish';
+        if ($entry['state'] === 'rejected') {
+            $action = 'Reject permanently; do not publish';
+        } elseif ($willPublish && $datePlan['available_at'] > TIME_NOW) {
+            $action = 'Hold until scheduled time, then queue for paced publishing';
+        } elseif ($willPublish) {
+            $action = 'Queue for paced publishing';
+        } else {
+            $action = 'Mark as seen; do not publish';
+        }
         $statusIcon = $willPublish ? '&#x1F7E2;' : '&#x1F534;';
         $panelClass = $willPublish ? 'fp-preview-publish' : 'fp-preview-skip';
         $itemKey = feedpublisher_item_key($item['key']);
@@ -475,7 +505,12 @@ function feedpublisher_admin_initial_preview($values)
             . '<table style="width:100%;border-collapse:collapse;margin-bottom:14px">'
             . '<tr><th style="width:170px;text-align:left;padding:6px;border-bottom:1px solid #ddd">Initial action</th><td style="padding:6px;border-bottom:1px solid #ddd">' . htmlspecialchars_uni($action) . '</td></tr>'
             . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Entry</th><td style="padding:6px;border-bottom:1px solid #ddd"><strong>' . htmlspecialchars_uni($item['title']) . '</strong><br><small>' . htmlspecialchars_uni($item['url']) . '</small></td></tr>'
-            . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Published</th><td style="padding:6px;border-bottom:1px solid #ddd">' . ($item['published'] ? my_date('relative', (int) $item['published']) : 'Unknown') . '</td></tr>';
+            . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Source time</th><td style="padding:6px;border-bottom:1px solid #ddd">'
+            . ($datePlan['source_time'] ? my_date('normal', $datePlan['source_time']) : 'Missing or outside the supported 1980 to one-year-future range') . '</td></tr>'
+            . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Effective queue time</th><td style="padding:6px;border-bottom:1px solid #ddd">'
+            . ($entry['state'] === 'queued' ? my_date('normal', $datePlan['available_at']) : 'Not queued') . '</td></tr>'
+            . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Intended thread time</th><td style="padding:6px;border-bottom:1px solid #ddd">'
+            . ($entry['state'] === 'queued' ? my_date('normal', $datePlan['thread_time']) : 'No thread will be created') . '</td></tr>';
         try {
             $prepared = feedpublisher_prepare_item($values, $item);
             $removed = max(0, $prepared['raw_bytes'] - $prepared['cleaned_bytes']);
@@ -693,7 +728,7 @@ function feedpublisher_admin_operation_commit()
         if ($operation === 'discover') {
             $result = feedpublisher_discover_feed($feed);
             $message = 'Discovery completed: staged ' . $result['staged'] . ', skipped ' . $result['skipped']
-                . ', already known ' . $result['existing'] . ', queue-full ' . $result['full'] . '.';
+                . ', rejected ' . $result['rejected'] . ', already known ' . $result['existing'] . ', queue-full ' . $result['full'] . '.';
         } elseif ($operation === 'publish') {
             if (!empty($feed['publishing_paused'])) {
                 throw new RuntimeException('Resume this feed before manually publishing a batch.');

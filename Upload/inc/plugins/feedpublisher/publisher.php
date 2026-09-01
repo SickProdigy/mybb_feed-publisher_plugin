@@ -68,6 +68,7 @@ function feedpublisher_publish_queued_item($feed, $item)
             'uid' => (int) $user['uid'],
             'username' => $user['username'],
             'message' => $message,
+            'dateline' => feedpublisher_thread_dateline($feed, $item),
             'ipaddress' => isset($session->packedip) ? $session->packedip : my_inet_pton(get_ip()),
             'posthash' => '',
             'savedraft' => 0,

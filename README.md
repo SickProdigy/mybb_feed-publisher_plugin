@@ -58,6 +58,13 @@ and may independently select a built-in MyBB thread prefix available to its
 destination forum and posting user. Prefix eligibility is checked again at
 publication time, and dry run shows the exact subject plus the native prefix.
 
+Thread dates can use the time Feed Publisher posts to MyBB or a valid source
+publication time. Future-dated entries can be held, published using the current
+time, marked as seen, or permanently rejected. Source dates before 1980 or more
+than one year ahead are treated as invalid and safely fall back to MyBB posting
+time. An optional deterministic spread of up to 60 minutes can stagger newly
+queued entries without bypassing normal publication pacing.
+
 Each feed is limited to 1,000 active queued, processing, or failed entries.
 Published queue rows are retained for 90 days; the permanent imported-item
 record remains for deduplication. If a task is interrupted after reserving an

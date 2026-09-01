@@ -13,7 +13,7 @@ function feedpublisher_discover_feed($feed)
 {
     global $db;
 
-    $totals = array('staged' => 0, 'skipped' => 0, 'existing' => 0, 'full' => 0);
+    $totals = array('staged' => 0, 'skipped' => 0, 'rejected' => 0, 'existing' => 0, 'full' => 0);
     try {
         $items = feedpublisher_parse(feedpublisher_fetch($feed['url']));
         $initializing = empty($feed['initialized_at']);

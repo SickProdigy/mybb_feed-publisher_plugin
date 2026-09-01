@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.15 - 2026-09-01
+
+- Add per-feed MyBB publication-time or valid source-time thread timestamps.
+- Add explicit hold, clamp, skip, and reject policies for future-dated entries,
+  with a bounded one-year scheduling horizon and safe fallback for missing or
+  implausible dates.
+- Add deterministic scheduling spread up to 60 minutes, stable queue tie
+  ordering, and dry-run source, queue, and intended-thread time details.
+
 ## 0.1.14 - 2026-09-01
 
 - Add independent per-feed custom title text and native MyBB thread-prefix

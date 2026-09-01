@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://sickgaming.net',
         'author' => 'SickProdigy',
         'authorsite' => 'https://sickgaming.net',
-        'version' => '0.1.14',
+        'version' => '0.1.15',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -52,6 +52,9 @@ function feedpublisher_install()
             `uid` int unsigned NOT NULL,
             `title_prefix` varchar(40) NOT NULL DEFAULT '',
             `thread_prefix_id` int unsigned NOT NULL DEFAULT 0,
+            `thread_date_mode` varchar(16) NOT NULL DEFAULT 'publish',
+            `future_date_policy` varchar(16) NOT NULL DEFAULT 'hold',
+            `schedule_jitter_minutes` tinyint unsigned NOT NULL DEFAULT 0,
             `enabled` tinyint(1) NOT NULL DEFAULT 0,
             `interval_minutes` smallint unsigned NOT NULL DEFAULT 60,
             `publish_interval_minutes` smallint unsigned NOT NULL DEFAULT 60,
@@ -105,6 +108,9 @@ function feedpublisher_upgrade_schema()
     $columns = array(
         'title_prefix' => "varchar(40) NOT NULL DEFAULT '' AFTER `uid`",
         'thread_prefix_id' => "int unsigned NOT NULL DEFAULT 0 AFTER `title_prefix`",
+        'thread_date_mode' => "varchar(16) NOT NULL DEFAULT 'publish' AFTER `thread_prefix_id`",
+        'future_date_policy' => "varchar(16) NOT NULL DEFAULT 'hold' AFTER `thread_date_mode`",
+        'schedule_jitter_minutes' => "tinyint unsigned NOT NULL DEFAULT 0 AFTER `future_date_policy`",
         'interval_minutes' => "smallint unsigned NOT NULL DEFAULT 60 AFTER `enabled`",
         'publish_interval_minutes' => "smallint unsigned NOT NULL DEFAULT 60 AFTER `interval_minutes`",
         'max_posts_per_run' => "smallint unsigned NOT NULL DEFAULT 1 AFTER `publish_interval_minutes`",

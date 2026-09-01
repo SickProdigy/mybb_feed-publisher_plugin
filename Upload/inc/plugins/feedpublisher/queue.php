@@ -9,10 +9,57 @@ if (!defined('IN_MYBB')) {
     die('Direct access is not allowed.');
 }
 
+function feedpublisher_source_date_plan($feed, $item, $now = null)
+{
+    $now = $now === null ? TIME_NOW : max(0, (int) $now);
+    $source = max(0, (int) (isset($item['published']) ? $item['published'] : 0));
+    $valid = $source >= 315532800 && $source <= $now + 31536000;
+    if (!$valid) {
+        $source = 0;
+    }
+    $policy = isset($feed['future_date_policy']) ? $feed['future_date_policy'] : 'hold';
+    if (!in_array($policy, array('hold', 'clamp', 'skip', 'reject'), true)) {
+        $policy = 'hold';
+    }
+    $future = $source > $now;
+    $state = 'queued';
+    $availableAt = $future && $policy === 'hold' ? $source : $now;
+    if ($future && $policy === 'skip') {
+        $state = 'skipped';
+    } elseif ($future && $policy === 'reject') {
+        $state = 'rejected';
+    }
+    $jitterMinutes = max(0, min(60, (int) (isset($feed['schedule_jitter_minutes']) ? $feed['schedule_jitter_minutes'] : 0)));
+    $jitter = 0;
+    if ($state === 'queued' && $jitterMinutes > 0) {
+        $identity = isset($item['key']) ? (string) $item['key'] : '';
+        $jitter = hexdec(substr(hash('sha256', $identity), 0, 8)) % ($jitterMinutes * 60 + 1);
+        $availableAt += $jitter;
+    }
+    $dateMode = isset($feed['thread_date_mode']) ? $feed['thread_date_mode'] : 'publish';
+    $threadTime = $dateMode === 'source' && $source > 0 && (!$future || $policy === 'hold') ? $source : $now;
+    return array('state' => $state, 'source_time' => $source, 'source_valid' => $valid, 'future' => $future,
+        'available_at' => $availableAt, 'thread_time' => $threadTime, 'jitter_seconds' => $jitter);
+}
+
+function feedpublisher_thread_dateline($feed, $item, $now = null)
+{
+    $now = $now === null ? TIME_NOW : max(0, (int) $now);
+    if (!isset($feed['thread_date_mode']) || $feed['thread_date_mode'] !== 'source') {
+        return $now;
+    }
+    $source = max(0, (int) (isset($item['source_published']) ? $item['source_published'] : 0));
+    return $source >= 315532800 && $source <= $now ? $source : $now;
+}
+
 function feedpublisher_queue_stage($feed, $item, $state = 'queued')
 {
     global $db;
-    $state = $state === 'skipped' ? 'skipped' : 'queued';
+    $state = in_array($state, array('skipped', 'rejected'), true) ? $state : 'queued';
+    $datePlan = feedpublisher_source_date_plan($feed, $item);
+    if ($state === 'queued') {
+        $state = $datePlan['state'];
+    }
 
     $feedId = (int) $feed['id'];
     $itemKey = feedpublisher_item_key($item['key']);
@@ -45,20 +92,20 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
     if ($state === 'queued' && $queued >= 1000) {
         return 'full';
     }
-    $prepared = $state === 'skipped' ? null : feedpublisher_prepare_item($feed, $item);
+    $prepared = $state === 'queued' ? feedpublisher_prepare_item($feed, $item) : null;
 
     $record = array(
         'feed_id' => $feedId,
         'item_key' => $db->escape_string($itemKey),
         'title' => $db->escape_string(my_substr($item['title'], 0, 255)),
         'source_url' => $db->escape_string(substr($item['url'], 0, 2048)),
-        'raw_content' => $state === 'skipped' ? '' : $db->escape_string($item['content']),
-        'content' => $state === 'skipped' ? '' : $db->escape_string($prepared['content']),
-        'source_published' => max(0, (int) $item['published']),
+        'raw_content' => $state === 'queued' ? $db->escape_string($item['content']) : '',
+        'content' => $state === 'queued' ? $db->escape_string($prepared['content']) : '',
+        'source_published' => $datePlan['source_time'],
         'discovered_at' => TIME_NOW,
-        'available_at' => TIME_NOW,
+        'available_at' => $state === 'queued' ? $datePlan['available_at'] : TIME_NOW,
         'state' => $state,
-        'published_at' => $state === 'skipped' ? TIME_NOW : 0,
+        'published_at' => $state === 'queued' ? 0 : TIME_NOW,
     );
     $db->insert_query('feedpublisher_queue', $record);
 
@@ -113,12 +160,12 @@ function feedpublisher_queue_claim_due($feed, $force = false)
     feedpublisher_queue_release_stale_claims($feedId);
     $limit = max(1, min(25, (int) $feed['max_posts_per_run']));
     $direction = $feed['queue_order'] === 'newest' ? 'DESC' : 'ASC';
-    $sortTime = 'CASE WHEN source_published=0 THEN discovered_at ELSE source_published END';
+    $sortTime = 'CASE WHEN source_published=0 THEN discovered_at ELSE source_published END ' . $direction . ', id ' . $direction;
     $query = $db->simple_select(
         'feedpublisher_queue',
         '*',
         "feed_id={$feedId} AND state='queued' AND available_at<=" . TIME_NOW,
-        array('order_by' => $sortTime, 'order_dir' => $direction, 'limit' => $limit)
+        array('order_by' => $sortTime, 'limit' => $limit)
     );
 
     $claimed = array();
@@ -273,37 +320,42 @@ function feedpublisher_initial_stage_plan($feed, $items)
     }
 
     if ($policy === 'all') {
-        return array_map(function ($item) {
+        $plan = array_map(function ($item) {
             return array('item' => $item, 'state' => 'queued');
         }, $items);
-    }
-    if ($policy === 'start_now') {
-        return array_map(function ($item) {
+    } elseif ($policy === 'start_now') {
+        $plan = array_map(function ($item) {
             return array('item' => $item, 'state' => 'skipped');
         }, $items);
-    }
-
-    $newest = array_values($items);
-    usort($newest, function ($left, $right) {
-        $leftTime = (int) $left['published'];
-        $rightTime = (int) $right['published'];
-        if ($leftTime === $rightTime) {
-            return strcmp($right['key'], $left['key']);
+    } else {
+        $newest = array_values($items);
+        usort($newest, function ($left, $right) {
+            $leftTime = (int) $left['published'];
+            $rightTime = (int) $right['published'];
+            if ($leftTime === $rightTime) {
+                return strcmp($right['key'], $left['key']);
+            }
+            return $rightTime <=> $leftTime;
+        });
+        $limit = $policy === 'latest' ? 1 : max(1, min(100, (int) $feed['initial_limit']));
+        $selected = array();
+        foreach (array_slice($newest, 0, $limit) as $item) {
+            $selected[$item['key']] = true;
         }
-        return $rightTime <=> $leftTime;
-    });
-    $limit = $policy === 'latest' ? 1 : max(1, min(100, (int) $feed['initial_limit']));
-    $selected = array();
-    foreach (array_slice($newest, 0, $limit) as $item) {
-        $selected[$item['key']] = true;
+        $plan = array();
+        foreach ($items as $item) {
+            $plan[] = array(
+                'item' => $item,
+                'state' => isset($selected[$item['key']]) ? 'queued' : 'skipped',
+            );
+        }
     }
-
-    $plan = array();
-    foreach ($items as $item) {
-        $plan[] = array(
-            'item' => $item,
-            'state' => isset($selected[$item['key']]) ? 'queued' : 'skipped',
-        );
+    foreach ($plan as &$entry) {
+        $entry['date_plan'] = feedpublisher_source_date_plan($feed, $entry['item']);
+        if ($entry['state'] === 'queued') {
+            $entry['state'] = $entry['date_plan']['state'];
+        }
     }
+    unset($entry);
     return $plan;
 }
