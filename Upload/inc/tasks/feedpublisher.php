@@ -60,5 +60,7 @@ function task_feedpublisher($task)
     if ($errors) {
         $message .= ' Errors: ' . implode('; ', $errors);
     }
+    feedpublisher_log_event(0, 'task', $errors ? 'warning' : 'info', $message);
+    feedpublisher_log_prune(100);
     add_task_log($task, $message);
 }

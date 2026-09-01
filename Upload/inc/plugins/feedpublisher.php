@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://sickgaming.net',
         'author' => 'SickProdigy',
         'authorsite' => 'https://sickgaming.net',
-        'version' => '0.1.20',
+        'version' => '0.1.21',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -76,6 +76,7 @@ function feedpublisher_install()
             `strip_selectors` text NULL,
             `strip_regexes` text NULL,
             `last_checked` int unsigned NOT NULL DEFAULT 0,
+            `last_success_at` int unsigned NOT NULL DEFAULT 0,
             `fetch_failures` tinyint unsigned NOT NULL DEFAULT 0,
             `next_fetch_at` int unsigned NOT NULL DEFAULT 0,
             `last_published` int unsigned NOT NULL DEFAULT 0,
@@ -98,6 +99,8 @@ function feedpublisher_install()
             UNIQUE KEY `feed_item` (`feed_id`, `item_key`)
         ) ENGINE=MyISAM{$collation}");
     }
+
+    feedpublisher_install_logs_table($collation);
 
     feedpublisher_upgrade_schema();
     feedpublisher_install_task();
@@ -136,6 +139,7 @@ function feedpublisher_upgrade_schema()
         'remove_source_links' => "tinyint(1) NOT NULL DEFAULT 0 AFTER remove_bylines",
         'strip_regexes' => "text NULL AFTER strip_selectors",
         'fetch_failures' => "tinyint unsigned NOT NULL DEFAULT 0 AFTER last_checked",
+        'last_success_at' => "int unsigned NOT NULL DEFAULT 0 AFTER last_checked",
         'next_fetch_at' => "int unsigned NOT NULL DEFAULT 0 AFTER fetch_failures",
         'last_published' => "int unsigned NOT NULL DEFAULT 0 AFTER `last_checked`",
     );
@@ -173,6 +177,25 @@ function feedpublisher_upgrade_schema()
             KEY `state_available` (`state`, `available_at`)
         ) ENGINE=MyISAM{$collation}");
     }
+    feedpublisher_install_logs_table($db->build_create_table_collation());
+}
+
+function feedpublisher_install_logs_table($collation)
+{
+    global $db;
+    if (!$db->table_exists('feedpublisher_logs')) {
+        $db->write_query("CREATE TABLE `" . TABLE_PREFIX . "feedpublisher_logs` (
+            `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+            `feed_id` int unsigned NOT NULL DEFAULT 0,
+            `created_at` int unsigned NOT NULL,
+            `stage` varchar(24) NOT NULL DEFAULT 'general',
+            `severity` varchar(12) NOT NULL DEFAULT 'info',
+            `message` varchar(1000) NOT NULL DEFAULT '',
+            PRIMARY KEY (`id`),
+            KEY `feed_time` (`feed_id`, `created_at`),
+            KEY `stage_severity` (`stage`, `severity`)
+        ) ENGINE=MyISAM{$collation}");
+    }
 }
 
 function feedpublisher_uninstall()
@@ -180,6 +203,7 @@ function feedpublisher_uninstall()
     global $db;
 
     $db->drop_table('feedpublisher_queue');
+    $db->drop_table('feedpublisher_logs');
     $db->drop_table('feedpublisher_items');
     $db->drop_table('feedpublisher_feeds');
     $db->delete_query('tasks', "file='feedpublisher'");

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.21 - 2026-09-01
+
+- Add an ACP Diagnostics page with plugin, MyBB, PHP, extension, scheduled-task,
+  per-feed, queue, retry, error, and last-publication health information.
+- Add fetch/parse-only checks for at most 10 feeds without staging, cleanup,
+  reconciliation, configuration changes, or publication.
+- Add filterable diagnostic events by feed, stage, severity, and time, bounded
+  to 30 days and 1,000 rows with 100-row cleanup batches.
+- Add a copyable support report that excludes usernames, credentials, tokens,
+  cookies, post content, and response bodies, with feed URLs redacted by default.
+
 ## 0.1.20 - 2026-09-01
 
 - Add per-feed age and per-state count retention for terminal queue records,

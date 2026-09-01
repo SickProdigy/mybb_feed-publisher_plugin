@@ -113,6 +113,7 @@ class FeedPublisherQueueDb
     private $affected = 0;
 
     public function escape_string($value) { return addslashes((string) $value); }
+    public function table_exists($table) { return false; }
     public function affected_rows() { return $this->affected; }
     public function fetch_array($result) { return $result->index < count($result->rows) ? $result->rows[$result->index++] : false; }
     public function fetch_field($result, $field) { $row = $this->fetch_array($result); return $row && isset($row[$field]) ? $row[$field] : false; }
@@ -223,6 +224,16 @@ $suite->test('safe content URLs reject executable schemes', function ($t) {
     $t->assertSame(false, feedpublisher_safe_content_url('javascript:alert(1)'));
     $t->assertSame(false, feedpublisher_safe_content_url('data:text/html,bad'));
     $t->assertSame(true, feedpublisher_safe_content_url('https://example.com/a'));
+});
+
+$suite->test('support diagnostics redact secrets and optional URLs', function ($t) {
+    $source = 'token=abc123 cookie=session42 https://user:pass@example.com/private?q=1';
+    $safe = feedpublisher_safe_diagnostic_text($source, true);
+    $t->assertNotContains('abc123', $safe);
+    $t->assertNotContains('session42', $safe);
+    $t->assertNotContains('example.com', $safe);
+    $t->assertContains('[redacted URL]', $safe);
+    $t->assertSame('https://example.com/feed.xml', feedpublisher_safe_report_url('https://user:pass@example.com/feed.xml?unknown_secret=abc#part'));
 });
 
 $suite->test('SSRF validation rejects local and credentialed URLs', function ($t) {
@@ -359,6 +370,8 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
+    $t->assertContains("feedpublisher_install_logs_table", $source);
+    $t->assertContains("drop_table('feedpublisher_logs')", $source);
     $t->assertContains("delete_query('tasks'", $source);
 });
 

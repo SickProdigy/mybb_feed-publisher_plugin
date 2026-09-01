@@ -104,6 +104,20 @@ reset fetch backoff, clear eligible queue rows, and resolve uncertain outcomes.
 State-changing maintenance and recovery actions require confirmation and are
 recorded in MyBB's administrator log.
 
+The **Diagnostics** tab reports PHP/MyBB/plugin versions, required extensions,
+scheduled-task timing, per-feed checks/backoff/errors/queues, and recent bounded
+events. Its optional diagnostic run fetches and parses at most 10 feeds without
+changing feed, queue, cleanup, reconciliation, or publication state. The
+copyable support report excludes usernames, secrets, content, and response
+bodies; feed URLs are omitted unless explicitly requested.
+
+On DirectAdmin, create a temporary protected PHP information page or use a
+small extension check to confirm `curl`, `dom`, `libxml`, and `SimpleXML`; remove
+the page afterward because full PHP information exposes server details. If the
+Feed Publisher task is disabled or overdue, enable **Feed Publisher imports**
+under **Admin CP -> Tools & Maintenance -> Task Manager**, confirm MyBB's task
+runner is being triggered, and use Diagnostics to compare its next and last run.
+
 ## Security model
 
 Feed content is converted to MyCode rather than posted as trusted HTML. Feed

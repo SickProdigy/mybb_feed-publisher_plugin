@@ -40,6 +40,7 @@ function feedpublisher_discover_feed($feed)
         $totals['reconciled'] = $reconciled;
         $update = array(
             'last_checked' => TIME_NOW,
+            'last_success_at' => TIME_NOW,
             'fetch_failures' => 0,
             'next_fetch_at' => 0,
             'last_error' => '',
@@ -49,6 +50,7 @@ function feedpublisher_discover_feed($feed)
             $update['initialized_at'] = TIME_NOW;
         }
         $db->update_query('feedpublisher_feeds', $update, 'id=' . (int) $feed['id']);
+        feedpublisher_log_event((int) $feed['id'], 'discovery', 'info', 'Discovery succeeded; parsed ' . count($items) . ' entries and staged ' . $totals['staged'] . '.');
         return $totals;
     } catch (Throwable $exception) {
         $failures = min(10, (int) $feed['fetch_failures'] + 1);
@@ -60,6 +62,7 @@ function feedpublisher_discover_feed($feed)
             'next_fetch_at' => TIME_NOW + $retryDelay,
             'last_error' => $db->escape_string($message),
         ), 'id=' . (int) $feed['id']);
+        feedpublisher_log_event((int) $feed['id'], $exception instanceof FeedPublisherException ? $exception->getStage() : 'discovery', 'error', $message);
         throw $exception;
     }
 }

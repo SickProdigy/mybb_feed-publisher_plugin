@@ -34,6 +34,8 @@ function feedpublisher_admin_controller()
         feedpublisher_admin_operations_page();
     } elseif ($action === 'preview') {
         feedpublisher_admin_preview_saved();
+    } elseif ($action === 'diagnostics') {
+        feedpublisher_admin_diagnostics();
     } elseif ($action === 'delete') {
         feedpublisher_admin_delete();
     } elseif ($action === 'add' || $action === 'edit') {
@@ -58,7 +60,121 @@ function feedpublisher_admin_tabs($active)
             'link' => 'index.php?module=config/feedpublisher&amp;action=add',
             'description' => 'Configure a new RSS or Atom feed.',
         ),
+        'diagnostics' => array(
+            'title' => 'Diagnostics',
+            'link' => 'index.php?module=config/feedpublisher&amp;action=diagnostics',
+            'description' => 'Review runtime health, feed status, safe logs, and support details.',
+        ),
     ), $active);
+}
+
+function feedpublisher_admin_diagnostics()
+{
+    global $db, $mybb, $page;
+
+    $runResults = array();
+    if ($mybb->request_method === 'post' && $mybb->get_input('diagnostic_run', MyBB::INPUT_INT)) {
+        verify_post_check($mybb->get_input('my_post_key'));
+        $query = $db->simple_select('feedpublisher_feeds', 'id,name,url', '', array('order_by' => 'id', 'limit' => 10));
+        while ($feed = $db->fetch_array($query)) {
+            $runResults[] = array('feed' => $feed, 'result' => feedpublisher_test_feed_connection($feed['url']));
+        }
+    }
+
+    $task = $db->fetch_array($db->simple_select('tasks', 'tid,enabled,nextrun', "file='feedpublisher'", array('limit' => 1)));
+    $lastRun = 0;
+    if ($task && $db->table_exists('tasklog')) {
+        $log = $db->fetch_array($db->simple_select('tasklog', 'dateline', 'tid=' . (int) $task['tid'], array('order_by' => 'dateline', 'order_dir' => 'DESC', 'limit' => 1)));
+        $lastRun = $log ? (int) $log['dateline'] : 0;
+    }
+    $overdue = $task && !empty($task['enabled']) && (int) $task['nextrun'] > 0 && (int) $task['nextrun'] < TIME_NOW - 600;
+
+    $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
+    $page->add_breadcrumb_item('Diagnostics');
+    $page->output_header('Feed Publisher diagnostics');
+    feedpublisher_admin_tabs('diagnostics');
+
+    $runtime = new Table;
+    $runtime->construct_header('Component');
+    $runtime->construct_header('Status');
+    $runtime->construct_cell('Feed Publisher'); $runtime->construct_cell(htmlspecialchars_uni(feedpublisher_info()['version'])); $runtime->construct_row();
+    $runtime->construct_cell('MyBB'); $runtime->construct_cell(defined('MYBB_VERSION') ? htmlspecialchars_uni(MYBB_VERSION) : 'Unknown'); $runtime->construct_row();
+    $runtime->construct_cell('PHP'); $runtime->construct_cell(htmlspecialchars_uni(PHP_VERSION)); $runtime->construct_row();
+    foreach (array('curl' => 'cURL', 'dom' => 'DOM', 'libxml' => 'libxml', 'SimpleXML' => 'SimpleXML') as $extension => $label) {
+        $runtime->construct_cell($label); $runtime->construct_cell(extension_loaded($extension) ? '<span style="color:#287b31">Available</span>' : '<span style="color:#a00">Missing</span>'); $runtime->construct_row();
+    }
+    $runtime->output('Runtime requirements');
+
+    $taskTable = new Table;
+    $taskTable->construct_header('Task state'); $taskTable->construct_header('Next run'); $taskTable->construct_header('Last run');
+    $taskTable->construct_cell(!$task ? '<span style="color:#a00">Not installed</span>' : (!empty($task['enabled']) ? 'Enabled' : '<span style="color:#a00">Disabled</span>'));
+    $taskTable->construct_cell($task && (int) $task['nextrun'] ? my_date('normal', (int) $task['nextrun']) . ($overdue ? '<br><strong style="color:#a00">Appears overdue</strong>' : '') : 'Not scheduled');
+    $taskTable->construct_cell($lastRun ? my_date('normal', $lastRun) : 'No task log found'); $taskTable->construct_row();
+    $taskTable->output('Scheduled task');
+
+    $feedTable = new Table;
+    foreach (array('Feed', 'State', 'Last successful check', 'Retry / error', 'Queue', 'Last publication') as $heading) { $feedTable->construct_header($heading); }
+    $feeds = array();
+    $query = $db->simple_select('feedpublisher_feeds', '*', '', array('order_by' => 'name'));
+    while ($feed = $db->fetch_array($query)) {
+        $feeds[] = $feed;
+        $counts = feedpublisher_queue_counts((int) $feed['id']);
+        $feedTable->construct_cell('<strong>' . htmlspecialchars_uni($feed['name']) . '</strong><br><small>Feed #' . (int) $feed['id'] . '</small>');
+        $feedTable->construct_cell(empty($feed['enabled']) ? 'Disabled' : (!empty($feed['publishing_paused']) ? 'Checking enabled; publishing paused' : 'Checking and publishing enabled'));
+        $feedTable->construct_cell((int) $feed['last_success_at'] ? my_date('normal', (int) $feed['last_success_at']) : 'Never');
+        $retry = (int) $feed['next_fetch_at'] > TIME_NOW ? 'Retry ' . my_date('relative', (int) $feed['next_fetch_at']) : 'No active backoff';
+        $feedTable->construct_cell($retry . (!empty($feed['last_error']) ? '<br><small style="color:#a00">' . htmlspecialchars_uni(feedpublisher_safe_diagnostic_text($feed['last_error'])) . '</small>' : ''));
+        $feedTable->construct_cell('Queued ' . $counts['queued'] . '; failed ' . $counts['failed'] . '; uncertain ' . $counts['uncertain']);
+        $feedTable->construct_cell((int) $feed['last_published'] ? my_date('normal', (int) $feed['last_published']) : 'Never');
+        $feedTable->construct_row();
+    }
+    if (!$feeds) { $feedTable->construct_cell('No feeds configured.', array('colspan' => 6)); $feedTable->construct_row(); }
+    $feedTable->output('Feed health');
+
+    echo '<form method="post" action="index.php?module=config/feedpublisher&amp;action=diagnostics"><input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '"><input type="hidden" name="diagnostic_run" value="1"><p><input class="button" type="submit" value="Run fetch/parse diagnostics"> <small>Checks at most 10 feeds. Does not save, queue, reconcile, clean up, or publish.</small></p></form>';
+    if ($runResults) {
+        $testTable = new Table; $testTable->construct_header('Feed'); $testTable->construct_header('Result'); $testTable->construct_header('Details');
+        foreach ($runResults as $row) {
+            $result = $row['result'];
+            $testTable->construct_cell(htmlspecialchars_uni($row['feed']['name']));
+            $testTable->construct_cell($result['ok'] ? '<span style="color:#287b31">Passed</span>' : '<span style="color:#a00">Failed at ' . htmlspecialchars_uni($result['stage']) . '</span>');
+            $testTable->construct_cell($result['ok'] ? htmlspecialchars_uni($result['parse']['format']) . ', ' . (int) $result['items'] . ' entries' : htmlspecialchars_uni($result['error']));
+            $testTable->construct_row();
+        }
+        $testTable->output('Diagnostic run');
+    }
+
+    $feedFilter = max(0, $mybb->get_input('log_feed', MyBB::INPUT_INT));
+    $stage = $mybb->get_input('log_stage');
+    $severity = $mybb->get_input('log_severity');
+    $hours = max(1, min(720, $mybb->get_input('log_hours', MyBB::INPUT_INT) ?: 168));
+    $conditions = array('created_at>=' . (TIME_NOW - $hours * 3600));
+    if ($feedFilter) { $conditions[] = 'feed_id=' . $feedFilter; }
+    if (in_array($stage, array('task','fetch','content-type','parse','discovery','publication','cleanup','general'), true)) { $conditions[] = "stage='" . $db->escape_string($stage) . "'"; }
+    if (in_array($severity, array('info','warning','error'), true)) { $conditions[] = "severity='" . $db->escape_string($severity) . "'"; }
+    echo '<form method="get" action="index.php"><input type="hidden" name="module" value="config/feedpublisher"><input type="hidden" name="action" value="diagnostics">Logs: feed <input type="number" name="log_feed" min="0" value="' . $feedFilter . '" style="width:70px"> stage <input name="log_stage" value="' . htmlspecialchars_uni($stage) . '" style="width:90px"> severity <input name="log_severity" value="' . htmlspecialchars_uni($severity) . '" style="width:80px"> hours <input type="number" name="log_hours" min="1" max="720" value="' . $hours . '" style="width:70px"> <input class="button" type="submit" value="Filter"></form>';
+    $logTable = new Table; foreach (array('Time','Feed','Stage','Severity','Message') as $heading) { $logTable->construct_header($heading); }
+    $query = $db->simple_select('feedpublisher_logs', '*', implode(' AND ', $conditions), array('order_by' => 'created_at', 'order_dir' => 'DESC', 'limit' => 200));
+    while ($event = $db->fetch_array($query)) {
+        $logTable->construct_cell(my_date('normal', (int) $event['created_at'])); $logTable->construct_cell((int) $event['feed_id'] ?: 'Task/global');
+        $logTable->construct_cell(htmlspecialchars_uni($event['stage'])); $logTable->construct_cell(htmlspecialchars_uni($event['severity']));
+        $logTable->construct_cell(htmlspecialchars_uni($event['message'])); $logTable->construct_row();
+    }
+    if ($logTable->num_rows() === 0) { $logTable->construct_cell('No matching diagnostic events.', array('colspan' => 5)); $logTable->construct_row(); }
+    $logTable->output('Diagnostic events (30 days / 1,000 rows maximum)');
+
+    $showUrls = $mybb->get_input('show_urls', MyBB::INPUT_INT) ? true : false;
+    $report = array('Feed Publisher support report', 'Plugin: ' . feedpublisher_info()['version'], 'MyBB: ' . (defined('MYBB_VERSION') ? MYBB_VERSION : 'unknown'), 'PHP: ' . PHP_VERSION,
+        'Extensions: curl=' . (extension_loaded('curl') ? 'yes' : 'no') . ' dom=' . (extension_loaded('dom') ? 'yes' : 'no') . ' libxml=' . (extension_loaded('libxml') ? 'yes' : 'no') . ' SimpleXML=' . (extension_loaded('SimpleXML') ? 'yes' : 'no'),
+        'Task: ' . (!$task ? 'missing' : (!empty($task['enabled']) ? 'enabled' : 'disabled')) . '; overdue=' . ($overdue ? 'yes' : 'no') . '; last_run=' . ($lastRun ?: 0));
+    foreach ($feeds as $feed) {
+        $line = 'Feed #' . (int) $feed['id'] . ': enabled=' . (int) $feed['enabled'] . ' paused=' . (int) $feed['publishing_paused'] . ' failures=' . (int) $feed['fetch_failures'] . ' last_success=' . (int) $feed['last_success_at'] . ' last_publish=' . (int) $feed['last_published'];
+        if ($showUrls) { $line .= ' url=' . feedpublisher_safe_report_url($feed['url']); }
+        if ($feed['last_error'] !== '') { $line .= ' error=' . feedpublisher_safe_diagnostic_text($feed['last_error'], true); }
+        $report[] = $line;
+    }
+    echo '<h3>Copyable support report</h3><p>' . ($showUrls ? '<a href="index.php?module=config/feedpublisher&amp;action=diagnostics">Redact feed URLs</a>' : '<a href="index.php?module=config/feedpublisher&amp;action=diagnostics&amp;show_urls=1">Include feed URLs</a>') . '. Usernames, credentials, tokens, cookies, URL queries/fragments, post content, and remote response bodies are never included.</p><textarea readonly style="width:100%;height:260px">' . htmlspecialchars_uni(implode("\n", $report)) . '</textarea>';
+    $page->output_footer();
 }
 
 function feedpublisher_admin_list()

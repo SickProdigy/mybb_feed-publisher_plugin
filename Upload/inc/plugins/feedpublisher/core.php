@@ -32,6 +32,59 @@ function feedpublisher_safe_log_text($text)
     return substr($text, 0, 1000);
 }
 
+function feedpublisher_safe_diagnostic_text($text, $redactUrls = false)
+{
+    $text = feedpublisher_safe_log_text($text);
+    $text = preg_replace('/\b(authorization|cookie|token|password|secret|api[_ -]?key)\s*[:=]\s*[^\s;,]+/i', '$1=[redacted]', $text);
+    if ($redactUrls) {
+        $text = preg_replace('~https?://[^\s<>]+~i', '[redacted URL]', $text);
+    } else {
+        $text = preg_replace('~(https?://)[^/@\s]+@~i', '$1[redacted]@', $text);
+    }
+    return substr($text, 0, 1000);
+}
+
+function feedpublisher_safe_report_url($url)
+{
+    $parts = parse_url((string) $url);
+    if (!$parts || empty($parts['scheme']) || empty($parts['host'])) { return '[invalid URL]'; }
+    $safe = strtolower($parts['scheme']) . '://' . strtolower($parts['host']);
+    if (isset($parts['port'])) { $safe .= ':' . (int) $parts['port']; }
+    return $safe . (isset($parts['path']) && $parts['path'] !== '' ? $parts['path'] : '/');
+}
+
+function feedpublisher_log_event($feedId, $stage, $severity, $message)
+{
+    global $db;
+    if (!$db->table_exists('feedpublisher_logs')) { return; }
+    $stage = in_array($stage, array('task', 'fetch', 'content-type', 'parse', 'discovery', 'publication', 'cleanup', 'general'), true) ? $stage : 'general';
+    $severity = in_array($severity, array('info', 'warning', 'error'), true) ? $severity : 'info';
+    $db->insert_query('feedpublisher_logs', array('feed_id' => max(0, (int) $feedId), 'created_at' => TIME_NOW,
+        'stage' => $db->escape_string($stage), 'severity' => $db->escape_string($severity),
+        'message' => $db->escape_string(feedpublisher_safe_diagnostic_text($message))));
+}
+
+function feedpublisher_log_prune($limit = 100)
+{
+    global $db;
+    if (!$db->table_exists('feedpublisher_logs')) { return 0; }
+    $limit = max(1, min(100, (int) $limit));
+    $cutoff = TIME_NOW - 30 * 86400;
+    $ids = array();
+    $query = $db->simple_select('feedpublisher_logs', 'id', 'created_at<' . $cutoff, array('order_by' => 'created_at', 'order_dir' => 'ASC', 'limit' => $limit));
+    while ($row = $db->fetch_array($query)) { $ids[(int) $row['id']] = (int) $row['id']; }
+    if (count($ids) < $limit) {
+        $total = (int) $db->fetch_field($db->simple_select('feedpublisher_logs', 'COUNT(id) AS total'), 'total');
+        $overflow = max(0, $total - 1000);
+        if ($overflow) {
+            $query = $db->simple_select('feedpublisher_logs', 'id', '', array('order_by' => 'created_at,id', 'order_dir' => 'ASC', 'limit' => min($overflow, $limit - count($ids))));
+            while ($row = $db->fetch_array($query)) { $ids[(int) $row['id']] = (int) $row['id']; }
+        }
+    }
+    if ($ids) { $db->delete_query('feedpublisher_logs', 'id IN (' . implode(',', $ids) . ')'); }
+    return count($ids);
+}
+
 function feedpublisher_resolve_url($url)
 {
     $parts = parse_url($url);

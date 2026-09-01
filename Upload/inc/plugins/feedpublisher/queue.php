@@ -273,6 +273,7 @@ function feedpublisher_queue_fail($item, $message, $retryDelay = 300)
         'claimed_at' => 0,
         'last_error' => $db->escape_string(substr($message, 0, 1000)),
     ), "id=" . (int) $item['id'] . " AND claim_token='" . $db->escape_string($item['claim_token']) . "'");
+    feedpublisher_log_event((int) $item['feed_id'], 'publication', $state === 'failed' ? 'error' : 'warning', $message);
 }
 
 function feedpublisher_queue_dispatch($feed, $publisher, $force = false)
