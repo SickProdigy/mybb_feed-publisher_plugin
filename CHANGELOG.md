@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.11 - 2026-09-01
+
+- Present dry-run entries as collapsible review panels with the first entry open.
+- Put the initial action first, followed by entry and publication metadata,
+  cleanup byte and percentage measurements, and realistic example title/body
+  output including configured source attribution.
+- Keep import state secondary by showing it only for already-known entries.
+
 ## 0.1.10 - 2026-09-01
 
 - Add visible return-to-form, edit-feed, and feed-list navigation controls to

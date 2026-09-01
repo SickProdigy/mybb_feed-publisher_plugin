@@ -22,6 +22,7 @@ function feedpublisher_admin_controller()
     require_once MYBB_ADMIN_DIR . 'inc/class_table.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/core.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/queue.php';
+    require_once MYBB_ROOT . 'inc/plugins/feedpublisher/publisher.php';
 
     $action = $mybb->get_input('action');
     if ($action === 'save') {
@@ -393,18 +394,12 @@ function feedpublisher_admin_initial_preview($values)
     $page->output_header('Feed Publisher initial import preview');
     feedpublisher_admin_tabs('feeds');
 
-    $table = new Table;
-    $table->construct_header('Entry');
-    $table->construct_header('Published');
-    $table->construct_header('Initial action');
-    $table->construct_header('Import state');
-    $table->construct_header('Cleanup');
-    $table->construct_header('Cleaned result');
-    foreach (array_slice($plan, 0, 100) as $entry) {
+    echo '<div style="margin:12px 0"><strong>Initial policy:</strong> ' . htmlspecialchars_uni($values['initial_policy'])
+        . ' &middot; <strong>Maximum posts per run:</strong> ' . (int) $values['max_posts_per_run']
+        . ' &middot; <strong>Previewed entries:</strong> ' . min(100, count($plan)) . '</div>';
+    foreach (array_slice($plan, 0, 100) as $index => $entry) {
         $item = $entry['item'];
-        $table->construct_cell('<strong>' . htmlspecialchars_uni($item['title']) . '</strong><br><small>' . htmlspecialchars_uni($item['url']) . '</small>');
-        $table->construct_cell($item['published'] ? my_date('relative', (int) $item['published']) : 'Unknown');
-        $table->construct_cell($entry['state'] === 'queued' ? 'Queue for paced publishing' : 'Mark as seen; do not publish');
+        $action = $entry['state'] === 'queued' ? 'Queue for paced publishing' : 'Mark as seen; do not publish';
         $itemKey = feedpublisher_item_key($item['key']);
         $condition = 'feed_id=' . (int) $values['id'] . " AND item_key='" . $db->escape_string($itemKey) . "'";
         $imported = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_items', 'tid,pid,imported_at', $condition, array('limit' => 1))) : null;
@@ -418,23 +413,41 @@ function feedpublisher_admin_initial_preview($values)
         } else {
             $importState = 'New';
         }
-        $table->construct_cell($importState);
+        echo '<details' . ($index === 0 ? ' open' : '') . ' style="margin:0 0 10px;border:1px solid #ccc;background:#fff">'
+            . '<summary style="cursor:pointer;padding:12px;font-weight:bold">' . htmlspecialchars_uni($action)
+            . ' &mdash; ' . htmlspecialchars_uni($item['title']) . '</summary>'
+            . '<div style="padding:0 12px 14px">'
+            . '<table style="width:100%;border-collapse:collapse;margin-bottom:14px">'
+            . '<tr><th style="width:170px;text-align:left;padding:6px;border-bottom:1px solid #ddd">Initial action</th><td style="padding:6px;border-bottom:1px solid #ddd">' . htmlspecialchars_uni($action) . '</td></tr>'
+            . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Entry</th><td style="padding:6px;border-bottom:1px solid #ddd"><strong>' . htmlspecialchars_uni($item['title']) . '</strong><br><small>' . htmlspecialchars_uni($item['url']) . '</small></td></tr>'
+            . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Published</th><td style="padding:6px;border-bottom:1px solid #ddd">' . ($item['published'] ? my_date('relative', (int) $item['published']) : 'Unknown') . '</td></tr>';
         try {
             $prepared = feedpublisher_prepare_item($values, $item);
             $removed = max(0, $prepared['raw_bytes'] - $prepared['cleaned_bytes']);
-            $table->construct_cell('Source HTML: ' . $prepared['raw_bytes'] . ' bytes<br>Cleaned HTML: ' . $prepared['cleaned_bytes'] . ' bytes<br>Removed: ' . $removed . ' bytes');
-            $table->construct_cell('<pre style="white-space:pre-wrap;max-height:14em;overflow:auto">' . htmlspecialchars_uni(my_substr($prepared['content'], 0, 2000)) . '</pre>');
+            $percent = $prepared['raw_bytes'] > 0 ? round(($removed / $prepared['raw_bytes']) * 100, 1) : 0;
+            $previewItem = array('source_url' => $item['url'], 'title' => $item['title']);
+            $exampleTitle = my_substr(trim($item['title']), 0, 85);
+            $exampleBody = feedpublisher_add_source_attribution($prepared['content'], $previewItem, $values['attribution_mode']);
+            echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">HTML cleanup</th><td style="padding:6px;border-bottom:1px solid #ddd">Source: '
+                . $prepared['raw_bytes'] . ' bytes &middot; Cleaned: ' . $prepared['cleaned_bytes']
+                . ' bytes &middot; Removed: ' . $removed . ' bytes (' . $percent . '%)</td></tr>';
+            if ($importState !== 'New') {
+                echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Existing state</th><td style="padding:6px;border-bottom:1px solid #ddd">' . $importState . '</td></tr>';
+            }
+            echo '</table><h3 style="margin-bottom:5px">Example title</h3>'
+                . '<div style="padding:10px;border:1px solid #ccc;background:#f7f7f7">' . htmlspecialchars_uni($exampleTitle) . '</div>'
+                . '<h3 style="margin-bottom:5px">Example body</h3>'
+                . '<pre style="white-space:pre-wrap;max-height:28em;overflow:auto;padding:10px;border:1px solid #ccc;background:#f7f7f7">'
+                . htmlspecialchars_uni($exampleBody) . '</pre>';
         } catch (Throwable $exception) {
-            $table->construct_cell('Conversion failed');
-            $table->construct_cell('<span style="color:#a00">' . htmlspecialchars_uni($exception->getMessage()) . '</span>');
+            echo '<tr><th style="text-align:left;padding:6px">Conversion</th><td style="padding:6px;color:#a00">Failed: '
+                . htmlspecialchars_uni($exception->getMessage()) . '</td></tr></table>';
         }
-        $table->construct_row();
+        echo '</div></details>';
     }
     if (!$plan) {
-        $table->construct_cell('The feed contains no eligible entries.', array('colspan' => 6));
-        $table->construct_row();
+        echo '<p>The feed contains no eligible entries.</p>';
     }
-    $table->output('Preview: ' . htmlspecialchars_uni($values['initial_policy']));
     echo '<p><strong>Dry run only:</strong> this preview did not create threads, posts, queue rows, imported-item records, or configuration changes.</p>';
     if (count($plan) > 100) {
         echo '<p>Showing the first 100 of ' . count($plan) . ' entries.</p>';
