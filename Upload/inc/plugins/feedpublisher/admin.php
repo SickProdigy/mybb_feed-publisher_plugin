@@ -86,7 +86,10 @@ function feedpublisher_admin_list()
         $id = (int) $feed['id'];
         $counts = feedpublisher_queue_counts($id);
         $queueStatus = 'Queued: ' . $counts['queued'] . '<br>Processing: ' . $counts['processing']
-            . '<br>Published: ' . $counts['published'] . '<br>Failed: ' . $counts['failed'];
+            . '<br>Published: ' . $counts['published'] . '<br>Skipped: ' . $counts['skipped'] . '<br>Failed: ' . $counts['failed'];
+        $initialStatus = empty($feed['initialized_at'])
+            ? 'Initial scan pending (' . htmlspecialchars_uni($feed['initial_policy']) . ')'
+            : 'Initial scan: ' . my_date('relative', (int) $feed['initialized_at']) . ' (' . htmlspecialchars_uni($feed['initial_policy']) . ')';
         $controls = '<a href="index.php?module=config/feedpublisher&amp;action=edit&amp;id=' . $id . '">Edit</a>'
             . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=delete&amp;id=' . $id . '">Delete</a>';
         $table->construct_cell('<strong>' . htmlspecialchars_uni($feed['name']) . '</strong><br><small>' . htmlspecialchars_uni($feed['url']) . '</small>');
@@ -94,7 +97,7 @@ function feedpublisher_admin_list()
         $table->construct_cell(htmlspecialchars_uni($feed['username'] ?: 'Missing user'));
         $table->construct_cell((int) $feed['interval_minutes'] . ' minutes');
         $table->construct_cell($feed['enabled'] ? 'Enabled' : 'Disabled');
-        $table->construct_cell($queueStatus . (!empty($feed['publishing_paused']) ? '<br><strong>Publishing paused</strong>' : ''));
+        $table->construct_cell($queueStatus . '<br>' . $initialStatus . (!empty($feed['publishing_paused']) ? '<br><strong>Publishing paused</strong>' : ''));
         $table->construct_cell($lastResult);
         $table->construct_cell($controls);
         $table->construct_row();
@@ -134,6 +137,9 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'max_posts_per_run' => 1,
         'queue_order' => 'oldest',
         'publishing_paused' => 0,
+        'initial_policy' => 'latest',
+        'initial_limit' => 1,
+        'initialized_at' => 0,
         'strip_selectors' => '',
     ), $values);
 
@@ -164,6 +170,11 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->output_row('Feed URL <em>*</em>', 'The public HTTP or HTTPS RSS/Atom URL.', $form->generate_text_box('url', $values['url']));
     $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum.', $form->generate_select_box('fid', $forums, (int) $values['fid']));
     $container->output_row('Posting user <em>*</em>', 'The MyBB account used as the post author.', $form->generate_select_box('uid', $users, (int) $values['uid']));
+    $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent queues one; recent count queues a bounded number; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only', 'recent' => 'Recent count', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
+    $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
+    if (!empty($values['initialized_at'])) {
+        $container->output_row('Initial scan completed', my_date('relative', (int) $values['initialized_at']) . '. Changing the policy requires confirmation and resets queued, skipped, and failed entries for the next discovery.', $form->generate_check_box('reset_initial_policy', 1, 'Confirm reset if the policy or recent count is changed.'));
+    }
     $container->output_row('Import interval <em>*</em>', 'Minutes between checks (minimum 5, maximum 10080).', $form->generate_numeric_field('interval_minutes', (int) $values['interval_minutes'], array('min' => 5, 'max' => 10080)));
     $container->output_row('Publication interval <em>*</em>', 'Minimum minutes between publishing batches for this feed.', $form->generate_numeric_field('publish_interval_minutes', (int) $values['publish_interval_minutes'], array('min' => 5, 'max' => 10080)));
     $container->output_row('Maximum posts per run <em>*</em>', 'Maximum queued entries released for this feed in one task run (1 to 25). Use 1 for gradual posting.', $form->generate_numeric_field('max_posts_per_run', (int) $values['max_posts_per_run'], array('min' => 1, 'max' => 25)));
@@ -172,7 +183,10 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->output_row('Cleanup selectors', 'Optional CSS selectors, one per line. Issue #5 will make these rules operational.', $form->generate_text_area('strip_selectors', $values['strip_selectors']));
     $container->output_row('Enabled', 'Only enabled feeds are inspected by the scheduled task.', $form->generate_check_box('enabled', 1, 'Enable this feed', array('checked' => !empty($values['enabled']))));
     $container->end();
-    $form->output_submit_wrapper(array($form->generate_submit_button($action === 'edit' ? 'Save feed' : 'Add feed')));
+    $form->output_submit_wrapper(array(
+        $form->generate_submit_button($action === 'edit' ? 'Save feed' : 'Add feed', array('name' => 'save_feed')),
+        $form->generate_submit_button('Preview initial selection', array('name' => 'preview_initial'))
+    ));
     $form->end();
     $page->output_footer();
 }
@@ -183,6 +197,10 @@ function feedpublisher_admin_save()
 
     verify_post_check($mybb->get_input('my_post_key'));
     $id = $mybb->get_input('id', MyBB::INPUT_INT);
+    $currentFeed = array();
+    if ($id) {
+        $currentFeed = $db->fetch_array($db->simple_select('feedpublisher_feeds', '*', 'id=' . $id, array('limit' => 1)));
+    }
     $values = array(
         'id' => $id,
         'name' => trim($mybb->get_input('name')),
@@ -194,6 +212,10 @@ function feedpublisher_admin_save()
         'max_posts_per_run' => $mybb->get_input('max_posts_per_run', MyBB::INPUT_INT),
         'queue_order' => $mybb->get_input('queue_order'),
         'publishing_paused' => $mybb->get_input('publishing_paused', MyBB::INPUT_INT) ? 1 : 0,
+        'initial_policy' => $mybb->get_input('initial_policy'),
+        'initial_limit' => $mybb->get_input('initial_limit', MyBB::INPUT_INT),
+        'reset_initial_policy' => $mybb->get_input('reset_initial_policy', MyBB::INPUT_INT) ? 1 : 0,
+        'preview_initial' => isset($mybb->input['preview_initial']) ? 1 : 0,
         'strip_selectors' => trim($mybb->get_input('strip_selectors')),
         'enabled' => $mybb->get_input('enabled', MyBB::INPUT_INT) ? 1 : 0,
     );
@@ -220,10 +242,35 @@ function feedpublisher_admin_save()
     if ($values['max_posts_per_run'] < 1 || $values['max_posts_per_run'] > 25) {
         $errors[] = 'Maximum posts per run must be between 1 and 25.';
     }
+    if (!in_array($values['initial_policy'], array('all', 'latest', 'recent', 'start_now'), true)) {
+        $errors[] = 'Select a valid initial import policy.';
+    }
+    if ($values['initial_limit'] < 1 || $values['initial_limit'] > 100) {
+        $errors[] = 'The initial recent count must be between 1 and 100.';
+    }
     if (!in_array($values['queue_order'], array('oldest', 'newest'), true)) {
         $errors[] = 'Select a valid queue order.';
     }
-    if ($id && !$db->fetch_field($db->simple_select('feedpublisher_feeds', 'id', 'id=' . $id, array('limit' => 1)), 'id')) {
+    if ($values['preview_initial'] && !$errors) {
+        feedpublisher_admin_initial_preview($values);
+        return;
+    }
+    $policyChanged = $currentFeed && !empty($currentFeed['initialized_at'])
+        && ($values['initial_policy'] !== $currentFeed['initial_policy']
+            || ($values['initial_policy'] === 'recent' && $values['initial_limit'] !== (int) $currentFeed['initial_limit']));
+    if ($policyChanged && $values['reset_initial_policy']) {
+        $processing = (int) $db->fetch_field($db->simple_select('feedpublisher_queue', 'COUNT(id) AS total', "feed_id=" . $id . " AND state='processing'"), 'total');
+        if ($processing > 0) {
+            $errors[] = 'Wait for processing queue claims to finish before resetting the initial policy.';
+        }
+    }
+    if ($policyChanged && !$values['reset_initial_policy']) {
+        $errors[] = 'Confirm the initial-policy reset before changing a policy that has already been applied.';
+    }
+    if ($currentFeed) {
+        $values['initialized_at'] = (int) $currentFeed['initialized_at'];
+    }
+    if ($id && !$currentFeed) {
         $errors[] = 'The selected feed does not exist.';
     }
 
@@ -243,10 +290,17 @@ function feedpublisher_admin_save()
         'max_posts_per_run' => $values['max_posts_per_run'],
         'queue_order' => $db->escape_string($values['queue_order']),
         'publishing_paused' => $values['publishing_paused'],
+        'initial_policy' => $db->escape_string($values['initial_policy']),
+        'initial_limit' => $values['initial_limit'],
+        'initialized_at' => ($policyChanged && $values['reset_initial_policy']) ? 0 : (int) ($currentFeed['initialized_at'] ?? 0),
+        'last_checked' => ($policyChanged && $values['reset_initial_policy']) ? 0 : (int) ($currentFeed['last_checked'] ?? 0),
         'strip_selectors' => $db->escape_string($values['strip_selectors']),
     );
     if ($id) {
         $db->update_query('feedpublisher_feeds', $record, 'id=' . $id);
+        if ($policyChanged && $values['reset_initial_policy']) {
+            $db->delete_query('feedpublisher_queue', "feed_id=" . $id . " AND state IN ('queued','skipped','failed')");
+        }
         flash_message('The feed was updated.', 'success');
     } else {
         $db->insert_query('feedpublisher_feeds', $record);
@@ -293,4 +347,46 @@ function feedpublisher_admin_delete()
 function feedpublisher_admin_url_is_valid($url)
 {
     return strlen($url) <= 2048 && feedpublisher_validate_url($url);
+}
+
+function feedpublisher_admin_initial_preview($values)
+{
+    global $page;
+
+    try {
+        $items = feedpublisher_parse(feedpublisher_fetch($values['url']));
+        $plan = feedpublisher_initial_stage_plan($values, $items);
+    } catch (Throwable $exception) {
+        feedpublisher_admin_form($values['id'] ? 'edit' : 'add', $values, array(
+            'Preview failed: ' . htmlspecialchars_uni($exception->getMessage()),
+        ));
+        return;
+    }
+
+    $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
+    $page->add_breadcrumb_item('Initial import preview');
+    $page->output_header('Feed Publisher initial import preview');
+    feedpublisher_admin_tabs('feeds');
+
+    $table = new Table;
+    $table->construct_header('Entry');
+    $table->construct_header('Published');
+    $table->construct_header('Initial action');
+    foreach (array_slice($plan, 0, 100) as $entry) {
+        $item = $entry['item'];
+        $table->construct_cell('<strong>' . htmlspecialchars_uni($item['title']) . '</strong><br><small>' . htmlspecialchars_uni($item['url']) . '</small>');
+        $table->construct_cell($item['published'] ? my_date('relative', (int) $item['published']) : 'Unknown');
+        $table->construct_cell($entry['state'] === 'queued' ? 'Queue for paced publishing' : 'Mark as seen; do not publish');
+        $table->construct_row();
+    }
+    if (!$plan) {
+        $table->construct_cell('The feed contains no eligible entries.', array('colspan' => 3));
+        $table->construct_row();
+    }
+    $table->output('Preview: ' . htmlspecialchars_uni($values['initial_policy']));
+    echo '<p>This preview did not change the queue or feed configuration. Use your browser Back button to return to the completed form.</p>';
+    if (count($plan) > 100) {
+        echo '<p>Showing the first 100 of ' . count($plan) . ' entries.</p>';
+    }
+    $page->output_footer();
 }

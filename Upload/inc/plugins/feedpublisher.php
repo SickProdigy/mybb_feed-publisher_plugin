@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => '',
         'author' => 'SickProdigy',
         'authorsite' => '',
-        'version' => '0.1.2',
+        'version' => '0.1.3',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -56,6 +56,9 @@ function feedpublisher_install()
             `max_posts_per_run` smallint unsigned NOT NULL DEFAULT 1,
             `queue_order` varchar(10) NOT NULL DEFAULT 'oldest',
             `publishing_paused` tinyint(1) NOT NULL DEFAULT 0,
+            `initial_policy` varchar(16) NOT NULL DEFAULT 'latest',
+            `initial_limit` smallint unsigned NOT NULL DEFAULT 1,
+            `initialized_at` int unsigned NOT NULL DEFAULT 0,
             `strip_selectors` text NULL,
             `last_checked` int unsigned NOT NULL DEFAULT 0,
             `last_published` int unsigned NOT NULL DEFAULT 0,
@@ -97,6 +100,9 @@ function feedpublisher_upgrade_schema()
         'max_posts_per_run' => "smallint unsigned NOT NULL DEFAULT 1 AFTER `publish_interval_minutes`",
         'queue_order' => "varchar(10) NOT NULL DEFAULT 'oldest' AFTER `max_posts_per_run`",
         'publishing_paused' => "tinyint(1) NOT NULL DEFAULT 0 AFTER `queue_order`",
+        'initial_policy' => "varchar(16) NOT NULL DEFAULT 'latest' AFTER publishing_paused",
+        'initial_limit' => "smallint unsigned NOT NULL DEFAULT 1 AFTER initial_policy",
+        'initialized_at' => "int unsigned NOT NULL DEFAULT 0 AFTER initial_limit",
         'last_published' => "int unsigned NOT NULL DEFAULT 0 AFTER `last_checked`",
     );
     foreach ($columns as $name => $definition) {

@@ -17,13 +17,15 @@ Early development preview. The initial foundation includes:
 - Admin CP feed management with destination forum, posting user, enabled state,
   cleanup configuration, status visibility, and per-feed intervals;
 - persistent feed-entry staging with per-feed publication pacing, queue ordering,
-  pause controls, bounded retries, and queue status counts.
+  pause controls, bounded retries, and queue status counts;
+- per-feed initial import policies for all available entries, most recent only,
+  a bounded recent count, or starting after the current backlog.
 
 ## Requirements
 
 - MyBB 1.8.x
 - PHP 7.4 or newer
-- PHP DOM and SimpleXML extensions
+- PHP cURL, DOM, SimpleXML, and libxml extensions
 
 ## Install
 

@@ -20,7 +20,7 @@ function task_feedpublisher($task)
         require_once $publisherFile;
     }
 
-    $totals = array('feeds' => 0, 'staged' => 0, 'existing' => 0, 'full' => 0, 'published' => 0, 'failed' => 0);
+    $totals = array('feeds' => 0, 'staged' => 0, 'skipped' => 0, 'existing' => 0, 'full' => 0, 'published' => 0, 'failed' => 0);
     $errors = array();
     $query = $db->simple_select('feedpublisher_feeds', '*', 'enabled=1', array('order_by' => 'id'));
     while ($feed = $db->fetch_array($query)) {
@@ -32,16 +32,33 @@ function task_feedpublisher($task)
         if ($discoveryDue) {
             try {
                 $items = feedpublisher_parse(feedpublisher_fetch($feed['url']));
-                foreach ($items as $item) {
-                    $result = feedpublisher_queue_stage($feed, $item);
-                    if (isset($totals[$result])) {
+                $initializing = empty($feed['initialized_at']);
+                $plan = $initializing
+                    ? feedpublisher_initial_stage_plan($feed, $items)
+                    : array_map(function ($item) {
+                        return array('item' => $item, 'state' => 'queued');
+                    }, $items);
+                $initialComplete = true;
+                foreach ($plan as $entry) {
+                    $result = feedpublisher_queue_stage($feed, $entry['item'], $entry['state']);
+                    if ($result === 'queued') {
+                        ++$totals['staged'];
+                    } elseif (isset($totals[$result])) {
                         ++$totals[$result];
                     }
+                    if ($result === 'full') {
+                        $initialComplete = false;
+                    }
                 }
-                $db->update_query('feedpublisher_feeds', array(
+                $feedUpdate = array(
                     'last_checked' => TIME_NOW,
                     'last_error' => '',
-                ), 'id=' . (int) $feed['id']);
+                );
+                if ($initializing && $initialComplete) {
+                    $feedUpdate['initialized_at'] = TIME_NOW;
+                    $feed['initialized_at'] = TIME_NOW;
+                }
+                $db->update_query('feedpublisher_feeds', $feedUpdate, 'id=' . (int) $feed['id']);
             } catch (Throwable $exception) {
                 $message = substr($exception->getMessage(), 0, 1000);
                 $db->update_query('feedpublisher_feeds', array(
@@ -60,7 +77,7 @@ function task_feedpublisher($task)
     }
 
     $message = 'Checked ' . $totals['feeds'] . ' enabled feeds; staged ' . $totals['staged']
-        . ', already known ' . $totals['existing'] . ', queue-full skips ' . $totals['full']
+        . ', initially skipped ' . $totals['skipped'] . ', already known ' . $totals['existing'] . ', queue-full skips ' . $totals['full']
         . ', published ' . $totals['published'] . ', publication failures ' . $totals['failed'] . '.';
     if (!function_exists('feedpublisher_publish_queued_item')) {
         $message .= ' Publishing remains disabled until the issue #3 publisher is installed.';

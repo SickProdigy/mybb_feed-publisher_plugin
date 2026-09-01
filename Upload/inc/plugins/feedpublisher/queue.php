@@ -9,9 +9,10 @@ if (!defined('IN_MYBB')) {
     die('Direct access is not allowed.');
 }
 
-function feedpublisher_queue_stage($feed, $item)
+function feedpublisher_queue_stage($feed, $item, $state = 'queued')
 {
     global $db;
+    $state = $state === 'skipped' ? 'skipped' : 'queued';
 
     $feedId = (int) $feed['id'];
     $itemKey = hash('sha256', $item['key']);
@@ -41,7 +42,7 @@ function feedpublisher_queue_stage($feed, $item)
         'COUNT(id) AS total',
         "feed_id={$feedId} AND state IN ('queued','processing','failed')"
     ), 'total');
-    if ($queued >= 1000) {
+    if ($state === 'queued' && $queued >= 1000) {
         return 'full';
     }
 
@@ -50,16 +51,17 @@ function feedpublisher_queue_stage($feed, $item)
         'item_key' => $db->escape_string($itemKey),
         'title' => $db->escape_string(my_substr($item['title'], 0, 255)),
         'source_url' => $db->escape_string(substr($item['url'], 0, 2048)),
-        'raw_content' => $db->escape_string($item['content']),
-        'content' => $db->escape_string(feedpublisher_html_to_mycode($item['content'])),
+        'raw_content' => $state === 'skipped' ? '' : $db->escape_string($item['content']),
+        'content' => $state === 'skipped' ? '' : $db->escape_string(feedpublisher_html_to_mycode($item['content'])),
         'source_published' => max(0, (int) $item['published']),
         'discovered_at' => TIME_NOW,
         'available_at' => TIME_NOW,
-        'state' => 'queued',
+        'state' => $state,
+        'published_at' => $state === 'skipped' ? TIME_NOW : 0,
     );
     $db->insert_query('feedpublisher_queue', $record);
 
-    return 'queued';
+    return $state;
 }
 
 function feedpublisher_queue_counts($feedId)
@@ -209,6 +211,49 @@ function feedpublisher_queue_prune($feedId, $retentionDays = 90)
     $cutoff = TIME_NOW - max(1, (int) $retentionDays) * 86400;
     $db->delete_query(
         'feedpublisher_queue',
-        'feed_id=' . (int) $feedId . " AND state IN ('published','skipped') AND published_at>0 AND published_at<{$cutoff}"
+        'feed_id=' . (int) $feedId . " AND state='published' AND published_at>0 AND published_at<{$cutoff}"
     );
+}
+
+function feedpublisher_initial_stage_plan($feed, $items)
+{
+    $policy = isset($feed['initial_policy']) ? $feed['initial_policy'] : 'latest';
+    if (!in_array($policy, array('all', 'latest', 'recent', 'start_now'), true)) {
+        $policy = 'latest';
+    }
+
+    if ($policy === 'all') {
+        return array_map(function ($item) {
+            return array('item' => $item, 'state' => 'queued');
+        }, $items);
+    }
+    if ($policy === 'start_now') {
+        return array_map(function ($item) {
+            return array('item' => $item, 'state' => 'skipped');
+        }, $items);
+    }
+
+    $newest = array_values($items);
+    usort($newest, function ($left, $right) {
+        $leftTime = (int) $left['published'];
+        $rightTime = (int) $right['published'];
+        if ($leftTime === $rightTime) {
+            return strcmp($right['key'], $left['key']);
+        }
+        return $rightTime <=> $leftTime;
+    });
+    $limit = $policy === 'latest' ? 1 : max(1, min(100, (int) $feed['initial_limit']));
+    $selected = array();
+    foreach (array_slice($newest, 0, $limit) as $item) {
+        $selected[$item['key']] = true;
+    }
+
+    $plan = array();
+    foreach ($items as $item) {
+        $plan[] = array(
+            'item' => $item,
+            'state' => isset($selected[$item['key']]) ? 'queued' : 'skipped',
+        );
+    }
+    return $plan;
 }
