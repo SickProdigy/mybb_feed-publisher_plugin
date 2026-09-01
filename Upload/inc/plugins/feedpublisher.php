@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://sickgaming.net',
         'author' => 'SickProdigy',
         'authorsite' => 'https://sickgaming.net',
-        'version' => '0.1.22',
+        'version' => '0.1.23',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -76,6 +76,11 @@ function feedpublisher_install()
             `initial_limit` smallint unsigned NOT NULL DEFAULT 1,
             `initialized_at` int unsigned NOT NULL DEFAULT 0,
             `attribution_mode` varchar(16) NOT NULL DEFAULT 'link',
+            `post_header` text NULL,
+            `post_footer` text NULL,
+            `body_length_limit` int unsigned NOT NULL DEFAULT 0,
+            `continuation_mode` varchar(16) NOT NULL DEFAULT 'none',
+            `continuation_text` varchar(100) NOT NULL DEFAULT 'Continue reading',
             `remove_bylines` tinyint(1) NOT NULL DEFAULT 0,
             `remove_source_links` tinyint(1) NOT NULL DEFAULT 0,
             `strip_selectors` text NULL,
@@ -146,6 +151,11 @@ function feedpublisher_upgrade_schema()
         'initial_limit' => "smallint unsigned NOT NULL DEFAULT 1 AFTER initial_policy",
         'initialized_at' => "int unsigned NOT NULL DEFAULT 0 AFTER initial_limit",
         'attribution_mode' => "varchar(16) NOT NULL DEFAULT 'link' AFTER initialized_at",
+        'post_header' => "text NULL AFTER attribution_mode",
+        'post_footer' => "text NULL AFTER post_header",
+        'body_length_limit' => "int unsigned NOT NULL DEFAULT 0 AFTER post_footer",
+        'continuation_mode' => "varchar(16) NOT NULL DEFAULT 'none' AFTER body_length_limit",
+        'continuation_text' => "varchar(100) NOT NULL DEFAULT 'Continue reading' AFTER continuation_mode",
         'remove_bylines' => "tinyint(1) NOT NULL DEFAULT 0 AFTER attribution_mode",
         'remove_source_links' => "tinyint(1) NOT NULL DEFAULT 0 AFTER remove_bylines",
         'strip_regexes' => "text NULL AFTER strip_selectors",
@@ -162,6 +172,9 @@ function feedpublisher_upgrade_schema()
     if ($db->table_exists('feedpublisher_items') && !$db->field_exists('disposition', 'feedpublisher_items')) {
         $db->add_column('feedpublisher_items', 'disposition', "varchar(16) NOT NULL DEFAULT 'published' AFTER `source_url`");
     }
+    if ($db->table_exists('feedpublisher_queue') && !$db->field_exists('author', 'feedpublisher_queue')) {
+        $db->add_column('feedpublisher_queue', 'author', "varchar(255) NOT NULL DEFAULT '' AFTER source_url");
+    }
 
     if (!$db->table_exists('feedpublisher_queue')) {
         $collation = $db->build_create_table_collation();
@@ -171,6 +184,7 @@ function feedpublisher_upgrade_schema()
             `item_key` char(64) NOT NULL,
             `title` varchar(255) NOT NULL DEFAULT '',
             `source_url` varchar(2048) NOT NULL DEFAULT '',
+            `author` varchar(255) NOT NULL DEFAULT '',
             `raw_content` mediumtext NOT NULL,
             `content` mediumtext NOT NULL,
             `source_published` int unsigned NOT NULL DEFAULT 0,

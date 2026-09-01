@@ -103,6 +103,7 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
         'item_key' => $db->escape_string($itemKey),
         'title' => $db->escape_string(my_substr($item['title'], 0, 255)),
         'source_url' => $db->escape_string(substr($item['url'], 0, 2048)),
+        'author' => $db->escape_string(my_substr(isset($item['author']) ? $item['author'] : '', 0, 255)),
         'raw_content' => $state === 'queued' ? $db->escape_string($item['content']) : '',
         'content' => $state === 'queued' ? $db->escape_string($prepared['content']) : '',
         'source_published' => $datePlan['source_time'],

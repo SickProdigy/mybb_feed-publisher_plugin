@@ -287,6 +287,11 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'initial_limit' => 1,
         'initialized_at' => 0,
         'attribution_mode' => 'link',
+        'post_header' => '',
+        'post_footer' => '',
+        'body_length_limit' => 0,
+        'continuation_mode' => 'none',
+        'continuation_text' => 'Continue reading',
         'remove_bylines' => 0,
         'remove_source_links' => 0,
         'strip_selectors' => '',
@@ -367,6 +372,11 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
             $form->generate_check_box('reset_filter_history', 1, 'Confirm filter change and re-evaluate previously filtered entries.'));
     }
     $container->output_row('Source attribution <em>*</em>', 'Append a source link to every imported thread. Keeping attribution enabled is recommended.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
+    $container->output_row('Post header', 'Optional MyCode placed before the imported body. Allowed placeholders: {title}, {source_url}, {feed_name}, {author}, {published_date}.', $form->generate_text_area('post_header', $values['post_header']));
+    $container->output_row('Post footer', 'Optional MyCode placed after the imported body but before the separate source-attribution line. The same safe placeholders are available.', $form->generate_text_area('post_footer', $values['post_footer']));
+    $container->output_row('Body length', '0 keeps the complete cleaned body. A positive value creates a word-safe plain-text excerpt at that character limit.', $form->generate_numeric_field('body_length_limit', (int) $values['body_length_limit'], array('min' => 0, 'max' => 100000)));
+    $container->output_row('Truncated-post link', 'When an excerpt is shortened, optionally add a link back to the original entry.', $form->generate_select_box('continuation_mode', array('none' => 'Do not add a continuation link', 'source_link' => 'Add a source link'), $values['continuation_mode'])
+        . ' &nbsp; Link text: ' . $form->generate_text_box('continuation_text', $values['continuation_text'], array('maxlength' => 100)));
     $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent queues one; recent count queues a bounded number; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only', 'recent' => 'Recent count', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
     $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
     if (!empty($values['initialized_at'])) {
@@ -483,6 +493,11 @@ function feedpublisher_admin_save()
         'initial_policy' => $mybb->get_input('initial_policy'),
         'initial_limit' => $mybb->get_input('initial_limit', MyBB::INPUT_INT),
         'attribution_mode' => $mybb->get_input('attribution_mode'),
+        'post_header' => $mybb->get_input('post_header'),
+        'post_footer' => $mybb->get_input('post_footer'),
+        'body_length_limit' => $mybb->get_input('body_length_limit', MyBB::INPUT_INT),
+        'continuation_mode' => $mybb->get_input('continuation_mode'),
+        'continuation_text' => trim($mybb->get_input('continuation_text')),
         'reset_initial_policy' => $mybb->get_input('reset_initial_policy', MyBB::INPUT_INT) ? 1 : 0,
         'preview_initial' => isset($mybb->input['preview_initial']) ? 1 : 0,
         'refresh_prefixes' => isset($mybb->input['refresh_prefixes']) ? 1 : 0,
@@ -602,6 +617,10 @@ function feedpublisher_admin_save()
     if (!in_array($values['attribution_mode'], array('link', 'title_link', 'none'), true)) {
         $errors[] = 'Select a valid source attribution mode.';
     }
+    foreach (feedpublisher_template_errors($values['post_header'], $values['post_footer']) as $templateError) $errors[] = $templateError;
+    if ($values['body_length_limit'] < 0 || $values['body_length_limit'] > 100000) $errors[] = 'Body length must be between 0 and 100000 characters.';
+    if (!in_array($values['continuation_mode'], array('none', 'source_link'), true)) $errors[] = 'Select a valid truncated-post link option.';
+    if (my_strlen($values['continuation_text']) > 100) $errors[] = 'Continuation link text must not exceed 100 characters.';
     foreach (feedpublisher_cleanup_validate_rules($values['strip_selectors'], $values['strip_regexes']) as $cleanupError) {
         $errors[] = $cleanupError;
     }
@@ -672,6 +691,11 @@ function feedpublisher_admin_save()
         'initial_policy' => $db->escape_string($values['initial_policy']),
         'initial_limit' => $values['initial_limit'],
         'attribution_mode' => $db->escape_string($values['attribution_mode']),
+        'post_header' => $db->escape_string($values['post_header']),
+        'post_footer' => $db->escape_string($values['post_footer']),
+        'body_length_limit' => $values['body_length_limit'],
+        'continuation_mode' => $db->escape_string($values['continuation_mode']),
+        'continuation_text' => $db->escape_string($values['continuation_text']),
         'initialized_at' => ($policyChanged && $values['reset_initial_policy']) ? 0 : (int) ($currentFeed['initialized_at'] ?? 0),
         'last_checked' => (($policyChanged && $values['reset_initial_policy']) || ($filterChanged && $values['reset_filter_history'])) ? 0 : (int) ($currentFeed['last_checked'] ?? 0),
         'strip_selectors' => $db->escape_string($values['strip_selectors']),
@@ -840,8 +864,9 @@ function feedpublisher_admin_initial_preview($values)
             $prepared = feedpublisher_prepare_item($values, $item);
             $removed = max(0, $prepared['raw_bytes'] - $prepared['cleaned_bytes']);
             $percent = $prepared['raw_bytes'] > 0 ? round(($removed / $prepared['raw_bytes']) * 100, 1) : 0;
-            $previewItem = array('source_url' => $item['url'], 'title' => $item['title']);
-            $exampleTitle = feedpublisher_build_subject($item['title'], isset($values['title_prefix']) ? $values['title_prefix'] : '');
+            $previewItem = array('source_url' => $item['url'], 'title' => $item['title'], 'content' => $prepared['content'], 'author' => isset($item['author']) ? $item['author'] : '', 'source_published' => isset($item['published']) ? $item['published'] : 0);
+            $composed = feedpublisher_compose_post($values, $previewItem);
+            $exampleTitle = $composed['title'];
             $previewUser = !empty($values['uid']) ? get_user((int) $values['uid']) : array();
             $availablePreviewPrefixes = feedpublisher_available_thread_prefixes((int) $values['fid'], $previewUser);
             $selectedPrefix = !empty($values['thread_prefix_id']) && isset($availablePreviewPrefixes[(int) $values['thread_prefix_id']])
@@ -849,7 +874,7 @@ function feedpublisher_admin_initial_preview($values)
                 : false;
             $nativePrefixLabel = $selectedPrefix ? feedpublisher_thread_prefix_label($selectedPrefix) : 'No MyBB prefix';
             $displayedExampleTitle = $selectedPrefix ? $nativePrefixLabel . ' ' . $exampleTitle : $exampleTitle;
-            $exampleBody = feedpublisher_add_source_attribution($prepared['content'], $previewItem, $values['attribution_mode']);
+            $exampleBody = $composed['body'];
             echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">HTML cleanup</th><td style="padding:6px;border-bottom:1px solid #ddd">Source: '
                 . $prepared['raw_bytes'] . ' bytes &middot; Cleaned: ' . $prepared['cleaned_bytes']
                 . ' bytes &middot; Removed: ' . $removed . ' bytes (' . $percent . '%)</td></tr>';

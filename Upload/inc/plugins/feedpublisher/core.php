@@ -379,6 +379,7 @@ function feedpublisher_parse($xml, $fetchMetadata = array(), &$parseMetadata = n
             'url' => trim($link),
             'content' => $content,
             'published' => feedpublisher_parse_source_date($date),
+            'author' => trim(feedpublisher_dom_first_text($entry, array('author', 'creator'))),
             'categories' => array_values(array_unique($categories)),
             'has_media' => $hasMedia,
         );

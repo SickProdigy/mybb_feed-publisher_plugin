@@ -93,6 +93,14 @@ and may independently select a built-in MyBB thread prefix available to its
 destination forum and posting user. Prefix eligibility is checked again at
 publication time, and dry run shows the exact subject plus the native prefix.
 
+Post bodies may also use optional MyCode headers and footers. Templates accept
+only `{title}`, `{source_url}`, `{feed_name}`, `{author}`, and
+`{published_date}`; feed values are escaped before substitution and templates
+never execute PHP or raw HTML. A character limit can produce a word-safe
+plain-text excerpt with an optional configurable source link. The normal source
+attribution setting is applied afterward, and dry run uses the same final
+composition path as publication.
+
 Thread dates can use the time Feed Publisher posts to MyBB or a valid source
 publication time. Future-dated entries can be held, published using the current
 time, marked as seen, or permanently rejected. Source dates before 1980 or more

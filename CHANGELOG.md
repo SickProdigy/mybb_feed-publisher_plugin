@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.23 - 2026-09-01
+
+- Add optional per-feed MyCode headers and footers with a strict placeholder
+  allowlist for entry, feed, author, source URL, and publication-date values.
+- Add word-safe body excerpt limits with optional configurable continuation
+  links while preserving the existing unlimited-body default.
+- Use one post-composition path for dry-run previews and live publication so
+  the displayed final title and body match what MyBB receives.
+- Persist parsed entry authors with queued content and keep source attribution
+  as a separate final composition step that templates cannot replace.
+
 ## 0.1.22 - 2026-09-01
 
 - Add per-feed include and exclude filters for title, source URL, category/tag,

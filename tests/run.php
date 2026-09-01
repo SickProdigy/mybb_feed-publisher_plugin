@@ -278,6 +278,29 @@ $suite->test('source attribution rejects unsafe links', function ($t) {
     $t->assertContains('[url=https://example.com/a]Title[/url]', $safe);
 });
 
+$suite->test('post templates, placeholders, excerpts, and attribution compose deterministically', function ($t) {
+    $feed = array('name' => 'Release feed', 'title_prefix' => '[News]', 'post_header' => '[b]{feed_name}[/b]',
+        'post_footer' => 'By {author} on {published_date}', 'body_length_limit' => 12,
+        'continuation_mode' => 'source_link', 'continuation_text' => 'Read the rest', 'attribution_mode' => 'link');
+    $item = array('title' => 'A title', 'content' => 'One two three four five', 'source_url' => 'https://example.com/post',
+        'author' => 'Writer', 'source_published' => 1700000000);
+    $post = feedpublisher_compose_post($feed, $item);
+    $t->assertSame('[News] A title', $post['title']);
+    $t->assertSame(true, $post['truncated']);
+    $t->assertContains('[b]Release feed[/b]', $post['body']);
+    $t->assertContains('One two...', $post['body']);
+    $t->assertContains('[url=https://example.com/post]Read the rest[/url]', $post['body']);
+    $t->assertContains('By Writer on 2023-11-14 22:13:20', $post['body']);
+    $t->assertContains('Source: [url=https://example.com/post]', $post['body']);
+    $t->assertSame(1, count(feedpublisher_template_errors('{unknown}', '')));
+});
+
+$suite->test('default post composition preserves the existing body behavior', function ($t) {
+    $post = feedpublisher_compose_post(array('attribution_mode' => 'none'), array('title' => 'Title', 'content' => '[b]Complete body[/b]'));
+    $t->assertSame('[b]Complete body[/b]', $post['body']);
+    $t->assertSame(false, $post['truncated']);
+});
+
 $suite->test('future-date policies and dateline fallback', function ($t) {
     $base = array('thread_date_mode' => 'source', 'schedule_jitter_minutes' => 0);
     $future = TIME_NOW + 3600;
