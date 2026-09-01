@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.19 - 2026-09-01
+
+- Add bounded website feed discovery from declared RSS, RDF, and Atom alternate
+  links without crawling pages or executing remote content.
+- Add a no-write connection test reporting fetch/parse stage, HTTP status,
+  content type, redirect status, feed title, format, encoding, item count, and
+  newest valid source date.
+- Reuse DNS pinning, SSRF, TLS, redirect, timeout, response-size, and XML safety
+  controls for website and candidate requests, with safe error summaries and a
+  direct action for selecting a validated candidate.
+
 ## 0.1.18 - 2026-09-01
 
 - Add per-feed GUID/link, normalized-title, content-fingerprint, and combined

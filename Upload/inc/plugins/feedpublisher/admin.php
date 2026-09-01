@@ -136,11 +136,14 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
             admin_redirect('index.php?module=config/feedpublisher');
         }
     }
+    if ($mybb->get_input('feed_url') !== '') {
+        $values['url'] = trim($mybb->get_input('feed_url'));
+    }
 
     $values = array_merge(array(
         'id' => $id,
         'name' => '',
-        'url' => '',
+        'url' => $action === 'add' ? trim($mybb->get_input('feed_url')) : '',
         'fid' => 0,
         'uid' => 0,
         'title_prefix' => '',
@@ -199,7 +202,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     echo $form->generate_hidden_field('id', (int) $values['id']);
     $container = new FormContainer($action === 'edit' ? 'Edit feed' : 'Add feed');
     $container->output_row('Name <em>*</em>', 'A descriptive name shown in the Admin CP and task logs.', $form->generate_text_box('name', $values['name']));
-    $container->output_row('Feed URL <em>*</em>', 'The public HTTP or HTTPS RSS/Atom URL.', $form->generate_text_box('url', $values['url']));
+    $container->output_row('Feed or website URL <em>*</em>', 'Enter an exact public RSS/Atom URL, or enter a normal website URL and use Find feeds.', $form->generate_text_box('url', $values['url']));
     $refresh = "this.form.elements['refresh_prefixes'].click();";
     $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum. Changing it refreshes the available MyBB prefixes.', $form->generate_select_box('fid', $forums, (int) $values['fid'], array('onchange' => $refresh)));
     $container->output_row('Posting user <em>*</em>', 'The MyBB account used as the post author. Changing it refreshes the prefixes this user may apply.', $form->generate_select_box('uid', $users, (int) $values['uid'], array('onchange' => $refresh)));
@@ -236,9 +239,60 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->end();
     $form->output_submit_wrapper(array(
         $form->generate_submit_button($action === 'edit' ? 'Save feed' : 'Add feed', array('name' => 'save_feed')),
-        $form->generate_submit_button('Preview / dry run', array('name' => 'preview_initial'))
+        $form->generate_submit_button('Preview / dry run', array('name' => 'preview_initial')),
+        $form->generate_submit_button('Test connection', array('name' => 'test_connection')),
+        $form->generate_submit_button('Find feeds', array('name' => 'find_feeds'))
     ));
     $form->end();
+    $page->output_footer();
+}
+
+function feedpublisher_admin_connection_results($values, $candidates, $pageMetadata = array())
+{
+    global $page;
+
+    $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
+    $page->add_breadcrumb_item('Source test');
+    $page->output_header('Feed Publisher source test');
+    feedpublisher_admin_tabs(!empty($values['id']) ? 'feeds' : 'add');
+    if ($pageMetadata) {
+        echo '<p><strong>Website fetch:</strong> HTTP ' . (int) $pageMetadata['http_status']
+            . ' &middot; ' . htmlspecialchars_uni($pageMetadata['content_type'])
+            . ' &middot; Redirects: ' . (int) $pageMetadata['redirects'] . '</p>';
+    }
+    if (!$candidates) {
+        echo '<div class="error"><p>No declared RSS or Atom links were found. Feed Publisher checks only HTML alternate-link declarations and does not crawl the website.</p></div>';
+    } else {
+        $table = new Table;
+        foreach (array('Feed', 'Connection', 'Detected content', 'Entries', 'Action') as $heading) {
+            $table->construct_header($heading);
+        }
+        foreach (array_slice($candidates, 0, 20) as $candidate) {
+            $result = feedpublisher_test_feed_connection($candidate['url']);
+            $fetch = $result['fetch'];
+            $parse = $result['parse'];
+            $title = !empty($parse['title']) ? $parse['title'] : (!empty($candidate['declared_title']) ? $candidate['declared_title'] : 'Untitled feed');
+            $table->construct_cell('<strong>' . htmlspecialchars_uni($title) . '</strong><br><small>' . htmlspecialchars_uni($candidate['url']) . '</small>');
+            $connection = ($result['ok'] ? '<span style="color:#287b31">Success</span>' : '<span style="color:#a00">Failed at ' . htmlspecialchars_uni($result['stage']) . '</span>')
+                . '<br><small>HTTP ' . (isset($fetch['http_status']) ? (int) $fetch['http_status'] : 'not received')
+                . ' &middot; ' . htmlspecialchars_uni(isset($fetch['content_type']) && $fetch['content_type'] !== '' ? $fetch['content_type'] : 'no content type')
+                . ' &middot; Redirects: ' . (isset($fetch['redirects']) ? (int) $fetch['redirects'] : 0) . '</small>';
+            if (!$result['ok']) {
+                $connection .= '<br><small>' . htmlspecialchars_uni($result['error']) . '</small>';
+            }
+            $table->construct_cell($connection);
+            $table->construct_cell($result['ok'] ? htmlspecialchars_uni($parse['format']) . '<br><small>' . htmlspecialchars_uni($parse['encoding']) . '</small>' : 'Not parsed');
+            $newest = $result['newest'] ? my_date('normal', $result['newest']) : 'No valid source date';
+            $table->construct_cell($result['ok'] ? (int) $result['items'] . '<br><small>Newest: ' . $newest . '</small>' : '&mdash;');
+            $useUrl = 'index.php?module=config/feedpublisher&amp;action=' . (!empty($values['id']) ? 'edit&amp;id=' . (int) $values['id'] : 'add')
+                . '&amp;feed_url=' . rawurlencode($candidate['url']);
+            $table->construct_cell($result['ok'] ? '<a class="button" href="' . $useUrl . '">Use this feed</a>' : 'Unavailable');
+            $table->construct_row();
+        }
+        $table->output($pageMetadata ? 'Declared feeds' : 'Connection result');
+    }
+    echo '<p><a class="button" href="#" onclick="history.back(); return false;">&larr; Return to feed form</a> '
+        . '<a class="button" href="index.php?module=config/feedpublisher&amp;action=add">+ Add feed</a></p>';
     $page->output_footer();
 }
 
@@ -276,6 +330,8 @@ function feedpublisher_admin_save()
         'reset_initial_policy' => $mybb->get_input('reset_initial_policy', MyBB::INPUT_INT) ? 1 : 0,
         'preview_initial' => isset($mybb->input['preview_initial']) ? 1 : 0,
         'refresh_prefixes' => isset($mybb->input['refresh_prefixes']) ? 1 : 0,
+        'test_connection' => isset($mybb->input['test_connection']) ? 1 : 0,
+        'find_feeds' => isset($mybb->input['find_feeds']) ? 1 : 0,
         'strip_selectors' => trim($mybb->get_input('strip_selectors')),
         'strip_regexes' => trim($mybb->get_input('strip_regexes')),
         'remove_bylines' => $mybb->get_input('remove_bylines', MyBB::INPUT_INT) ? 1 : 0,
@@ -286,6 +342,24 @@ function feedpublisher_admin_save()
 
     if ($values['refresh_prefixes']) {
         feedpublisher_admin_form($id ? 'edit' : 'add', $values);
+        return;
+    }
+
+    if (($values['test_connection'] || $values['find_feeds']) && !feedpublisher_admin_url_is_valid($values['url'])) {
+        feedpublisher_admin_form($id ? 'edit' : 'add', $values, array('Enter a valid public HTTP or HTTPS URL before testing.'));
+        return;
+    }
+    if ($values['test_connection']) {
+        feedpublisher_admin_connection_results($values, array(array('url' => $values['url'], 'declared_title' => $values['name'])));
+        return;
+    }
+    if ($values['find_feeds']) {
+        try {
+            $discovery = feedpublisher_discover_declared_feeds($values['url']);
+            feedpublisher_admin_connection_results($values, $discovery['candidates'], $discovery['page']);
+        } catch (Throwable $exception) {
+            feedpublisher_admin_form($id ? 'edit' : 'add', $values, array('Feed discovery failed: ' . htmlspecialchars_uni(feedpublisher_safe_log_text($exception->getMessage()))));
+        }
         return;
     }
 

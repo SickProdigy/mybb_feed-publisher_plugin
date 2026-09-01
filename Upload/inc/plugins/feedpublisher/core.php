@@ -79,6 +79,19 @@ function feedpublisher_validate_url($url)
 
 function feedpublisher_fetch($url, $maxBytes = 2097152, &$metadata = null)
 {
+    $body = feedpublisher_fetch_resource($url, $maxBytes, 'application/rss+xml, application/atom+xml, application/xml, text/xml', $metadata);
+    $mediaType = $metadata['content_type'];
+    $acceptedTypes = array('application/rss+xml', 'application/atom+xml', 'application/rdf+xml', 'application/xml', 'text/xml');
+    $looksLikeXml = preg_match('/^(?:\xEF\xBB\xBF)?\s*(?:<\?xml\b|<(?:rss|feed|rdf:RDF)\b)/i', $body) === 1;
+    if (!in_array($mediaType, $acceptedTypes, true) && !$looksLikeXml) {
+        throw new FeedPublisherException('content-type', 'The feed response did not use an accepted XML content type.');
+    }
+    $metadata['content_type_fallback'] = !in_array($mediaType, $acceptedTypes, true);
+    return $body;
+}
+
+function feedpublisher_fetch_resource($url, $maxBytes, $accept, &$metadata = null)
+{
     if (!function_exists('curl_init')) {
         throw new FeedPublisherException('fetch', 'The PHP cURL extension is required.');
     }
@@ -102,7 +115,7 @@ function feedpublisher_fetch($url, $maxBytes = 2097152, &$metadata = null)
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_RESOLVE => array($parts['host'] . ':' . $port . ':' . $pinned),
         CURLOPT_USERAGENT => 'MyBB Feed Publisher/0.1',
-        CURLOPT_HTTPHEADER => array('Accept: application/rss+xml, application/atom+xml, application/xml, text/xml'),
+        CURLOPT_HTTPHEADER => array('Accept: ' . $accept),
         CURLOPT_WRITEFUNCTION => function ($handle, $chunk) use (&$body, &$tooLarge, $maxBytes) {
             if (strlen($body) + strlen($chunk) > $maxBytes) {
                 $tooLarge = true;
@@ -119,8 +132,16 @@ function feedpublisher_fetch($url, $maxBytes = 2097152, &$metadata = null)
     $error = curl_error($curl);
     curl_close($curl);
 
+    $mediaType = trim(strtok($contentType, ';'));
+    $charset = '';
+    if (preg_match('/(?:^|;)\s*charset\s*=\s*["\']?([^;"\']+)/i', $contentType, $match)) {
+        $charset = trim($match[1]);
+    }
+    $metadata = array('url' => $url, 'http_status' => $status, 'content_type' => $mediaType,
+        'http_charset' => $charset, 'redirects' => ($status >= 300 && $status < 400) ? 1 : 0);
+
     if ($tooLarge) {
-        throw new FeedPublisherException('fetch', 'The feed response exceeded the 2 MiB size limit.');
+        throw new FeedPublisherException('fetch', 'The remote response exceeded the configured size limit.');
     }
     if ($status >= 300 && $status < 400) {
         throw new FeedPublisherException('fetch', 'Feed redirects are not allowed.');
@@ -128,25 +149,74 @@ function feedpublisher_fetch($url, $maxBytes = 2097152, &$metadata = null)
     if ($ok === false || $status < 200 || $status >= 300) {
         throw new FeedPublisherException('fetch', 'The feed request failed' . ($error ? ': ' . $error : ' with HTTP ' . $status) . '.');
     }
-    $mediaType = trim(strtok($contentType, ';'));
-    $acceptedTypes = array('application/rss+xml', 'application/atom+xml', 'application/rdf+xml', 'application/xml', 'text/xml');
-    $looksLikeXml = preg_match('/^(?:\xEF\xBB\xBF)?\s*(?:<\?xml\b|<(?:rss|feed|rdf:RDF)\b)/i', $body) === 1;
-    if (!in_array($mediaType, $acceptedTypes, true) && !$looksLikeXml) {
-        throw new FeedPublisherException('content-type', 'The feed response did not use an accepted XML content type.');
-    }
-
-    $charset = '';
-    if (preg_match('/(?:^|;)\s*charset\s*=\s*["\']?([^;"\']+)/i', $contentType, $match)) {
-        $charset = trim($match[1]);
-    }
-    $metadata = array(
-        'url' => $url,
-        'content_type' => $mediaType,
-        'http_charset' => $charset,
-        'content_type_fallback' => !in_array($mediaType, $acceptedTypes, true),
-    );
-
     return $body;
+}
+
+function feedpublisher_discover_declared_feeds($url)
+{
+    $metadata = array();
+    $html = feedpublisher_fetch_resource($url, 1048576, 'text/html, application/xhtml+xml', $metadata);
+    if (!in_array($metadata['content_type'], array('text/html', 'application/xhtml+xml'), true)) {
+        throw new FeedPublisherException('content-type', 'The website response was not HTML.');
+    }
+    return array('page' => $metadata, 'candidates' => feedpublisher_extract_declared_feeds($html, $url));
+}
+
+function feedpublisher_extract_declared_feeds($html, $url)
+{
+    $previous = libxml_use_internal_errors(true);
+    $document = new DOMDocument;
+    $loaded = $document->loadHTML($html, LIBXML_NONET | LIBXML_NOWARNING | LIBXML_NOERROR);
+    libxml_clear_errors();
+    libxml_use_internal_errors($previous);
+    if (!$loaded) {
+        throw new FeedPublisherException('parse', 'The website HTML could not be inspected.');
+    }
+    $base = $url;
+    $baseNodes = $document->getElementsByTagName('base');
+    if ($baseNodes->length) {
+        $declaredBase = feedpublisher_resolve_relative_content_url($baseNodes->item(0)->getAttribute('href'), $url);
+        if ($declaredBase !== '') {
+            $base = $declaredBase;
+        }
+    }
+    $candidates = array();
+    foreach ($document->getElementsByTagName('link') as $link) {
+        $relations = preg_split('/\s+/', strtolower(trim($link->getAttribute('rel'))));
+        $type = strtolower(trim(strtok($link->getAttribute('type'), ';')));
+        if (!in_array('alternate', $relations, true)
+            || !in_array($type, array('application/rss+xml', 'application/atom+xml', 'application/rdf+xml'), true)) {
+            continue;
+        }
+        $candidate = feedpublisher_resolve_relative_content_url($link->getAttribute('href'), $base);
+        if ($candidate !== '' && !isset($candidates[$candidate])) {
+            $candidates[$candidate] = array('url' => $candidate, 'declared_title' => trim($link->getAttribute('title')));
+        }
+        if (count($candidates) >= 20) {
+            break;
+        }
+    }
+    return array_values($candidates);
+}
+
+function feedpublisher_test_feed_connection($url)
+{
+    $fetch = array();
+    try {
+        $xml = feedpublisher_fetch($url, 2097152, $fetch);
+        $parse = array();
+        $items = feedpublisher_parse($xml, $fetch, $parse);
+        $newest = 0;
+        foreach ($items as $item) {
+            $newest = max($newest, (int) $item['published']);
+        }
+        return array('ok' => true, 'stage' => 'complete', 'fetch' => $fetch, 'parse' => $parse,
+            'items' => count($items), 'newest' => $newest, 'error' => '');
+    } catch (Throwable $exception) {
+        return array('ok' => false, 'stage' => $exception instanceof FeedPublisherException ? $exception->getStage() : 'unknown',
+            'fetch' => $fetch, 'parse' => array(), 'items' => 0, 'newest' => 0,
+            'error' => feedpublisher_safe_log_text($exception->getMessage()));
+    }
 }
 
 function feedpublisher_parse($xml, $fetchMetadata = array(), &$parseMetadata = null)
@@ -187,6 +257,8 @@ function feedpublisher_parse($xml, $fetchMetadata = array(), &$parseMetadata = n
     );
 
     $xpath = new DOMXPath($rootNode->ownerDocument);
+    $titleNodes = $xpath->query('/*[local-name()="feed"]/*[local-name()="title"] | /*[local-name()="rss"]/*[local-name()="channel"]/*[local-name()="title"] | /*[local-name()="RDF"]/*[local-name()="channel"]/*[local-name()="title"]');
+    $parseMetadata['title'] = $titleNodes->length ? trim($titleNodes->item(0)->textContent) : '';
     $query = $format === 'Atom' ? '//*[local-name()="entry"]' : '//*[local-name()="item"]';
     $items = array();
     foreach ($xpath->query($query) as $entry) {

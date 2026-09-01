@@ -64,6 +64,13 @@ runs: they use the production fetch, parse, cleanup, and conversion pipeline,
 show detected feed format and source encoding plus existing import/queue state,
 and do not write plugin or forum data.
 
+When the exact endpoint is unknown, **Find feeds** fetches one website page and
+lists only its declared RSS/RDF/Atom alternate links; it never crawls the site.
+**Test connection** validates an exact endpoint without saving or queueing and
+reports the safe HTTP/fetch/parse metadata, detected format and encoding, item
+count, and newest source date. Both actions use the production network and XML
+safety controls and never display response bodies.
+
 Each feed may prepend arbitrary safe text such as `[RSS]` to generated subjects
 and may independently select a built-in MyBB thread prefix available to its
 destination forum and posting user. Prefix eligibility is checked again at

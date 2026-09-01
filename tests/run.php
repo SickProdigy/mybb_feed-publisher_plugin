@@ -314,6 +314,15 @@ $suite->test('relative content URLs preserve query strings and fragments', funct
     $t->assertSame('https://example.com/a/post?q=1#part', feedpublisher_resolve_relative_content_url('../post?q=1#part', 'https://example.com/a/b/feed.xml'));
 });
 
+$suite->test('website discovery reads only declared RSS and Atom links', function ($t) {
+    if (!extension_loaded('dom')) { $t->skip('PHP DOM is not installed.'); }
+    $feeds = feedpublisher_extract_declared_feeds(file_get_contents(__DIR__ . '/fixtures/feed-links.html'), 'https://example.com/index.html');
+    $t->assertSame(2, count($feeds));
+    $t->assertSame('https://example.com/public/feeds/news.xml', $feeds[0]['url']);
+    $t->assertSame('https://example.com/atom.xml', $feeds[1]['url']);
+    $t->assertSame('News Atom', $feeds[1]['declared_title']);
+});
+
 $suite->test('malformed and entity-bearing XML fail closed', function ($t) {
     if (!extension_loaded('SimpleXML') || !extension_loaded('dom')) { $t->skip('PHP SimpleXML and DOM are not installed.'); }
     $t->expectException('FeedPublisherException', function () { feedpublisher_parse(file_get_contents(__DIR__ . '/fixtures/malformed.xml')); });
