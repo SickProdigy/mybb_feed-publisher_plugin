@@ -353,12 +353,34 @@ function feedpublisher_parse($xml, $fetchMetadata = array(), &$parseMetadata = n
         if ($key === '') {
             $key = $link;
         }
+        $categories = array();
+        foreach ($xpath->query('./*[local-name()="category"]', $entry) as $categoryNode) {
+            $category = $categoryNode->hasAttribute('term') ? $categoryNode->getAttribute('term') : $categoryNode->textContent;
+            $category = trim($category);
+            if ($category !== '') { $categories[] = $category; }
+        }
+        $hasMedia = false;
+        foreach ($xpath->query('.//*', $entry) as $contentNode) {
+            $localName = strtolower($contentNode->localName);
+            if (in_array($localName, array('enclosure', 'image', 'thumbnail'), true)
+                || ($contentNode->namespaceURI === 'http://search.yahoo.com/mrss/' && $localName === 'content')) {
+                $hasMedia = true;
+                break;
+            }
+        }
+        if (!$hasMedia && $format === 'Atom') {
+            foreach ($xpath->query('./*[local-name()="link"]', $entry) as $candidate) {
+                if (strtolower(trim($candidate->getAttribute('rel'))) === 'enclosure') { $hasMedia = true; break; }
+            }
+        }
         $items[] = array(
             'key' => trim($key),
             'title' => trim($title),
             'url' => trim($link),
             'content' => $content,
             'published' => feedpublisher_parse_source_date($date),
+            'categories' => array_values(array_unique($categories)),
+            'has_media' => $hasMedia,
         );
     }
 
@@ -627,6 +649,71 @@ function feedpublisher_derive_item_identity($feed, $item)
         return array('strategy' => $strategy, 'identity' => '', 'key' => '', 'basis' => $basis);
     }
     return array('strategy' => $strategy, 'identity' => $identity, 'key' => feedpublisher_item_key($identity), 'basis' => $basis);
+}
+
+function feedpublisher_eligibility_rules($rules, &$errors = array())
+{
+    $parsed = array();
+    $lines = feedpublisher_cleanup_rule_lines($rules);
+    if (count($lines) > 50) { $errors[] = 'Eligibility filters are limited to 50 rules.'; return array(); }
+    $regexCount = 0;
+    foreach ($lines as $index => $line) {
+        if (strlen($line) > 500 || !preg_match('/^(include|exclude)(-regex)?\s+(title|url|category|body)\s*:\s*(.+)$/i', $line, $match)) {
+            $errors[] = 'Eligibility rule ' . ($index + 1) . ' must use: include|exclude [-regex] title|url|category|body: value.';
+            continue;
+        }
+        $regex = $match[2] !== '';
+        if ($regex && (++$regexCount > 20 || @preg_match($match[4], '') === false)) {
+            $errors[] = 'Eligibility rule ' . ($index + 1) . ' contains an invalid regex or exceeds the 20-regex limit.';
+            continue;
+        }
+        $parsed[] = array('action' => strtolower($match[1]), 'regex' => $regex, 'field' => strtolower($match[3]),
+            'value' => $match[4], 'label' => $line);
+    }
+    return $parsed;
+}
+
+function feedpublisher_entry_eligibility($feed, $item, $now = null)
+{
+    $now = $now === null ? TIME_NOW : (int) $now;
+    if (!empty($feed['require_entry_body']) && trim(strip_tags((string) $item['content'])) === '') {
+        return array('eligible' => false, 'reason' => 'Required body content is missing.');
+    }
+    if (!empty($feed['require_entry_media']) && empty($item['has_media'])) {
+        return array('eligible' => false, 'reason' => 'Required image or media item is missing.');
+    }
+    $published = isset($item['published']) ? (int) $item['published'] : 0;
+    $minimumHours = isset($feed['minimum_source_age_hours']) ? (int) $feed['minimum_source_age_hours'] : 0;
+    $maximumDays = isset($feed['maximum_source_age_days']) ? (int) $feed['maximum_source_age_days'] : 0;
+    if (($minimumHours > 0 || $maximumDays > 0) && $published <= 0) {
+        return array('eligible' => false, 'reason' => 'A source date is required by the configured age filter.');
+    }
+    if ($minimumHours > 0 && $published > $now - $minimumHours * 3600) {
+        return array('eligible' => false, 'reason' => 'Entry is newer than the minimum source age of ' . $minimumHours . ' hours.');
+    }
+    if ($maximumDays > 0 && $published < $now - $maximumDays * 86400) {
+        return array('eligible' => false, 'reason' => 'Entry is older than the maximum source age of ' . $maximumDays . ' days.');
+    }
+    $errors = array();
+    $rules = feedpublisher_eligibility_rules(isset($feed['eligibility_rules']) ? $feed['eligibility_rules'] : '', $errors);
+    if ($errors) { return array('eligible' => false, 'reason' => $errors[0]); }
+    $fields = array('title' => (string) $item['title'], 'url' => (string) $item['url'],
+        'category' => implode(' ', isset($item['categories']) ? $item['categories'] : array()), 'body' => (string) $item['content']);
+    $includeRules = 0;
+    $includeMatched = false;
+    foreach ($rules as $rule) {
+        $haystack = $fields[$rule['field']];
+        $matched = $rule['regex'] ? preg_match($rule['value'], $haystack) === 1
+            : (function_exists('mb_stripos') ? mb_stripos($haystack, $rule['value'], 0, 'UTF-8') !== false : stripos($haystack, $rule['value']) !== false);
+        if ($rule['action'] === 'exclude' && $matched) {
+            return array('eligible' => false, 'reason' => 'Matched exclusion rule: ' . $rule['label']);
+        }
+        if ($rule['action'] === 'include') { ++$includeRules; $includeMatched = $includeMatched || $matched; }
+    }
+    if ($includeRules > 0 && !$includeMatched) {
+        return array('eligible' => false, 'reason' => 'No configured inclusion rule matched.');
+    }
+    return array('eligible' => true, 'reason' => $includeRules ? 'Matched an inclusion rule and no exclusion rule.' : 'No eligibility rule rejected this entry.');
 }
 
 function feedpublisher_cleanup_rule_lines($rules)

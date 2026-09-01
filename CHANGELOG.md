@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.1.22 - 2026-09-01
+
+- Add per-feed include and exclude filters for title, source URL, category/tag,
+  and body text using bounded plain substring or validated regex rules.
+- Add minimum/maximum source age, required body, and required image/media
+  eligibility options before initial selection and queue staging.
+- Show exact pass/reject reasons in dry run and persist filter rejection as a
+  distinct durable disposition that survives terminal queue cleanup.
+- Require explicit re-evaluation when filters change and reset only prior
+  filter-rejected history, without reviving initial-policy skips.
+- Persist skipped and other terminal identities independently of queue retention
+  so duplicate source entries remain known after their display rows are pruned.
+
 ## 0.1.21 - 2026-09-01
 
 - Add an ACP Diagnostics page with plugin, MyBB, PHP, extension, scheduled-task,

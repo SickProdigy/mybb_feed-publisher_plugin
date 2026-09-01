@@ -7,6 +7,8 @@
       <title>RSS fixture entry</title>
       <link>https://example.com/rss-entry</link>
       <pubDate>Tue, 01 Sep 2026 12:00:00 +0000</pubDate>
+      <category>Giveaways</category>
+      <enclosure url="https://example.com/image.jpg" type="image/jpeg" length="1234" />
       <content:encoded><![CDATA[<p>Hello <strong>RSS</strong>.</p>]]></content:encoded>
     </item>
   </channel>

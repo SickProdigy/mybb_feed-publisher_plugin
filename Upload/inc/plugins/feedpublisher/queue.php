@@ -112,6 +112,14 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
         'published_at' => $state === 'queued' ? 0 : TIME_NOW,
     );
     $db->insert_query('feedpublisher_queue', $record);
+    if ($state !== 'queued') {
+        $disposition = isset($item['_disposition']) && in_array($item['_disposition'], array('filtered', 'skipped', 'rejected'), true)
+            ? $item['_disposition'] : $state;
+        $db->write_query('INSERT IGNORE INTO ' . TABLE_PREFIX . 'feedpublisher_items'
+            . ' (feed_id, item_key, source_url, disposition, tid, pid, imported_at) VALUES ('
+            . $feedId . ", '" . $db->escape_string($itemKey) . "', '" . $db->escape_string(substr($item['url'], 0, 2048))
+            . "', '" . $db->escape_string($disposition) . "', 0, 0, " . TIME_NOW . ')');
+    }
 
     return $state;
 }
@@ -203,6 +211,7 @@ function feedpublisher_queue_complete($feed, $item, $tid, $pid)
         'tid' => (int) $tid,
         'pid' => (int) $pid,
         'imported_at' => TIME_NOW,
+        'disposition' => 'published',
     ), 'feed_id=' . (int) $feed['id'] . " AND item_key='" . $db->escape_string($item['item_key']) . "'");
     if ($db->affected_rows() !== 1) {
         throw new RuntimeException('The publication reservation could not be finalized.');
@@ -231,8 +240,8 @@ function feedpublisher_queue_reserve($feed, $item)
     $itemKey = $db->escape_string($item['item_key']);
     $db->write_query(
         'INSERT IGNORE INTO ' . TABLE_PREFIX . 'feedpublisher_items'
-        . ' (feed_id, item_key, source_url, tid, pid, imported_at) VALUES ('
-        . $feedId . ", '" . $itemKey . "', '" . $db->escape_string($item['source_url']) . "', 0, 0, 0)"
+        . ' (feed_id, item_key, source_url, disposition, tid, pid, imported_at) VALUES ('
+        . $feedId . ", '" . $itemKey . "', '" . $db->escape_string($item['source_url']) . "', 'reserved', 0, 0, 0)"
     );
     return $db->affected_rows() === 1;
 }
@@ -450,4 +459,33 @@ function feedpublisher_initial_stage_plan($feed, $items)
     }
     unset($entry);
     return $plan;
+}
+
+function feedpublisher_eligibility_stage_plan($feed, $items, $initializing)
+{
+    $eligible = array();
+    $rejected = array();
+    foreach ($items as $item) {
+        $result = feedpublisher_entry_eligibility($feed, $item);
+        $item['_eligibility'] = $result;
+        if ($result['eligible']) {
+            $eligible[] = $item;
+        } else {
+            $item['_disposition'] = 'filtered';
+            $rejected[] = array('item' => $item, 'state' => 'rejected', 'eligibility' => $result,
+                'date_plan' => feedpublisher_source_date_plan($feed, $item));
+        }
+    }
+    $plan = $initializing ? feedpublisher_initial_stage_plan($feed, $eligible) : array_map(function ($item) use ($feed) {
+        $datePlan = feedpublisher_source_date_plan($feed, $item);
+        return array('item' => $item, 'state' => $datePlan['state'], 'eligibility' => $item['_eligibility'],
+            'date_plan' => $datePlan);
+    }, $eligible);
+    foreach ($plan as &$entry) {
+        $entry['eligibility'] = $entry['item']['_eligibility'];
+        if ($entry['state'] === 'skipped') { $entry['item']['_disposition'] = 'skipped'; }
+        elseif ($entry['state'] === 'rejected') { $entry['item']['_disposition'] = 'rejected'; }
+    }
+    unset($entry);
+    return array_merge($plan, $rejected);
 }

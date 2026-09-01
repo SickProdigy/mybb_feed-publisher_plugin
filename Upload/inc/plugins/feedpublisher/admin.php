@@ -272,6 +272,11 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'terminal_retention_count' => 1000,
         'dedupe_retention_days' => 0,
         'strict_reconciliation' => 0,
+        'eligibility_rules' => '',
+        'minimum_source_age_hours' => 0,
+        'maximum_source_age_days' => 0,
+        'require_entry_body' => 0,
+        'require_entry_media' => 0,
         'enabled' => 0,
         'interval_minutes' => 60,
         'publish_interval_minutes' => 60,
@@ -349,6 +354,18 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         . '<br>' . $form->generate_check_box('confirm_dedupe_pruning', 1, 'I understand that pruning duplicate history can allow old entries to be republished.'));
     $container->output_row('Strict source reconciliation', 'After a successful non-empty scan, reject unpublished queued entries no longer present only when the feed has not unexpectedly shrunk. Published MyBB content is never changed.',
         $form->generate_check_box('strict_reconciliation', 1, 'Reject missing unpublished queue entries', array('checked' => !empty($values['strict_reconciliation']))));
+    $container->output_row('Entry eligibility rules', 'Optional, one per line. Examples: include title: giveaway; exclude url: /sponsored/; include category: releases; exclude body: pre-order; include-regex title: ~free (game|weekend)~i. Any matching exclusion rejects; when includes exist, at least one must match.',
+        $form->generate_text_area('eligibility_rules', $values['eligibility_rules']));
+    $container->output_row('Source age eligibility', '0 disables a limit. Entries without a valid source date are rejected when either age filter is enabled.',
+        'Minimum age (hours): ' . $form->generate_numeric_field('minimum_source_age_hours', (int) $values['minimum_source_age_hours'], array('min' => 0, 'max' => 8760))
+        . ' &nbsp; Maximum age (days): ' . $form->generate_numeric_field('maximum_source_age_days', (int) $values['maximum_source_age_days'], array('min' => 0, 'max' => 3650)));
+    $container->output_row('Required entry content', 'Reject entries before queueing when required source content is absent.',
+        $form->generate_check_box('require_entry_body', 1, 'Require a non-empty body', array('checked' => !empty($values['require_entry_body']))) . '<br>'
+        . $form->generate_check_box('require_entry_media', 1, 'Require an image, enclosure, or Media RSS item', array('checked' => !empty($values['require_entry_media']))));
+    if (!empty($values['id'])) {
+        $container->output_row('Eligibility rule changes', 'Changing eligibility requires explicit re-evaluation. This removes only prior filter-rejection history so currently visible entries can be evaluated again.',
+            $form->generate_check_box('reset_filter_history', 1, 'Confirm filter change and re-evaluate previously filtered entries.'));
+    }
     $container->output_row('Source attribution <em>*</em>', 'Append a source link to every imported thread. Keeping attribution enabled is recommended.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
     $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent queues one; recent count queues a bounded number; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only', 'recent' => 'Recent count', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
     $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
@@ -452,6 +469,12 @@ function feedpublisher_admin_save()
         'dedupe_retention_days' => $mybb->get_input('dedupe_retention_days', MyBB::INPUT_INT),
         'confirm_dedupe_pruning' => $mybb->get_input('confirm_dedupe_pruning', MyBB::INPUT_INT) ? 1 : 0,
         'strict_reconciliation' => $mybb->get_input('strict_reconciliation', MyBB::INPUT_INT) ? 1 : 0,
+        'eligibility_rules' => trim($mybb->get_input('eligibility_rules')),
+        'minimum_source_age_hours' => $mybb->get_input('minimum_source_age_hours', MyBB::INPUT_INT),
+        'maximum_source_age_days' => $mybb->get_input('maximum_source_age_days', MyBB::INPUT_INT),
+        'require_entry_body' => $mybb->get_input('require_entry_body', MyBB::INPUT_INT) ? 1 : 0,
+        'require_entry_media' => $mybb->get_input('require_entry_media', MyBB::INPUT_INT) ? 1 : 0,
+        'reset_filter_history' => $mybb->get_input('reset_filter_history', MyBB::INPUT_INT) ? 1 : 0,
         'interval_minutes' => $mybb->get_input('interval_minutes', MyBB::INPUT_INT),
         'publish_interval_minutes' => $mybb->get_input('publish_interval_minutes', MyBB::INPUT_INT),
         'max_posts_per_run' => $mybb->get_input('max_posts_per_run', MyBB::INPUT_INT),
@@ -542,6 +565,22 @@ function feedpublisher_admin_save()
     if ($dedupePruningChanged && !$values['confirm_dedupe_pruning']) {
         $errors[] = 'Confirm the duplicate-history risk before enabling or changing destructive deduplication pruning.';
     }
+    if ($values['minimum_source_age_hours'] < 0 || $values['minimum_source_age_hours'] > 8760
+        || $values['maximum_source_age_days'] < 0 || $values['maximum_source_age_days'] > 3650) {
+        $errors[] = 'Source age filters are outside their allowed range.';
+    }
+    $ruleErrors = array();
+    feedpublisher_eligibility_rules($values['eligibility_rules'], $ruleErrors);
+    foreach ($ruleErrors as $ruleError) { $errors[] = $ruleError; }
+    $filterChanged = $currentFeed && (
+        trim((string) $currentFeed['eligibility_rules']) !== $values['eligibility_rules']
+        || (int) $currentFeed['minimum_source_age_hours'] !== $values['minimum_source_age_hours']
+        || (int) $currentFeed['maximum_source_age_days'] !== $values['maximum_source_age_days']
+        || (int) $currentFeed['require_entry_body'] !== $values['require_entry_body']
+        || (int) $currentFeed['require_entry_media'] !== $values['require_entry_media']);
+    if ($filterChanged && !$values['reset_filter_history']) {
+        $errors[] = 'Confirm re-evaluation before changing eligibility filters.';
+    }
     if ($values['interval_minutes'] < 5 || $values['interval_minutes'] > 10080) {
         $errors[] = 'The import interval must be between 5 and 10080 minutes.';
     }
@@ -619,6 +658,11 @@ function feedpublisher_admin_save()
         'terminal_retention_count' => $values['terminal_retention_count'],
         'dedupe_retention_days' => $values['dedupe_retention_days'],
         'strict_reconciliation' => $values['strict_reconciliation'],
+        'eligibility_rules' => $db->escape_string($values['eligibility_rules']),
+        'minimum_source_age_hours' => $values['minimum_source_age_hours'],
+        'maximum_source_age_days' => $values['maximum_source_age_days'],
+        'require_entry_body' => $values['require_entry_body'],
+        'require_entry_media' => $values['require_entry_media'],
         'enabled' => $values['enabled'],
         'interval_minutes' => $values['interval_minutes'],
         'publish_interval_minutes' => $values['publish_interval_minutes'],
@@ -629,7 +673,7 @@ function feedpublisher_admin_save()
         'initial_limit' => $values['initial_limit'],
         'attribution_mode' => $db->escape_string($values['attribution_mode']),
         'initialized_at' => ($policyChanged && $values['reset_initial_policy']) ? 0 : (int) ($currentFeed['initialized_at'] ?? 0),
-        'last_checked' => ($policyChanged && $values['reset_initial_policy']) ? 0 : (int) ($currentFeed['last_checked'] ?? 0),
+        'last_checked' => (($policyChanged && $values['reset_initial_policy']) || ($filterChanged && $values['reset_filter_history'])) ? 0 : (int) ($currentFeed['last_checked'] ?? 0),
         'strip_selectors' => $db->escape_string($values['strip_selectors']),
         'strip_regexes' => $db->escape_string($values['strip_regexes']),
         'remove_bylines' => $values['remove_bylines'],
@@ -639,10 +683,15 @@ function feedpublisher_admin_save()
         $db->update_query('feedpublisher_feeds', $record, 'id=' . $id);
         if ($policyChanged && $values['reset_initial_policy']) {
             $db->delete_query('feedpublisher_queue', "feed_id=" . $id . " AND state IN ('queued','skipped','failed')");
+            $db->delete_query('feedpublisher_items', 'feed_id=' . $id . " AND disposition='skipped'");
         }
         if ($identityChanged && $values['reset_identity_history']) {
             $db->delete_query('feedpublisher_queue', 'feed_id=' . $id);
             $db->delete_query('feedpublisher_items', 'feed_id=' . $id);
+        }
+        if ($filterChanged && $values['reset_filter_history']) {
+            $db->write_query('DELETE q FROM ' . TABLE_PREFIX . 'feedpublisher_queue q INNER JOIN ' . TABLE_PREFIX . 'feedpublisher_items i ON (i.feed_id=q.feed_id AND i.item_key=q.item_key) WHERE q.feed_id=' . $id . " AND i.disposition='filtered'");
+            $db->delete_query('feedpublisher_items', 'feed_id=' . $id . " AND disposition='filtered'");
         }
         flash_message('The feed was updated.', 'success');
     } else {
@@ -701,7 +750,7 @@ function feedpublisher_admin_initial_preview($values)
         $parseMetadata = array();
         $xml = feedpublisher_fetch($values['url'], 2097152, $fetchMetadata);
         $items = feedpublisher_parse($xml, $fetchMetadata, $parseMetadata);
-        $plan = feedpublisher_initial_stage_plan($values, $items);
+        $plan = feedpublisher_eligibility_stage_plan($values, $items, empty($values['initialized_at']));
     } catch (Throwable $exception) {
         feedpublisher_admin_form($values['id'] ? 'edit' : 'add', $values, array(
             'Preview failed: ' . htmlspecialchars_uni($exception->getMessage()),
@@ -746,7 +795,9 @@ function feedpublisher_admin_initial_preview($values)
         $datePlan = isset($entry['date_plan']) ? $entry['date_plan'] : feedpublisher_source_date_plan($values, $item);
         $willPublish = $entry['state'] === 'queued';
         if ($entry['state'] === 'rejected') {
-            $action = 'Reject permanently; do not publish';
+            $action = empty($entry['eligibility']['eligible'])
+                ? 'Reject permanently: ' . $entry['eligibility']['reason']
+                : 'Reject permanently; do not publish';
         } elseif ($willPublish && $datePlan['available_at'] > TIME_NOW) {
             $action = 'Hold until scheduled time, then queue for paced publishing';
         } elseif ($willPublish) {
@@ -759,14 +810,14 @@ function feedpublisher_admin_initial_preview($values)
         $identity = feedpublisher_derive_item_identity($values, $item);
         $itemKey = $identity['key'];
         $condition = 'feed_id=' . (int) $values['id'] . " AND item_key='" . $db->escape_string($itemKey) . "'";
-        $imported = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_items', 'tid,pid,imported_at', $condition, array('limit' => 1))) : null;
+        $imported = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_items', 'tid,pid,imported_at,disposition', $condition, array('limit' => 1))) : null;
         $queued = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_queue', 'state,tid,pid', $condition, array('limit' => 1))) : null;
         if ($imported && !empty($imported['tid'])) {
             $importState = 'Imported (thread ' . (int) $imported['tid'] . ', post ' . (int) $imported['pid'] . ')';
         } elseif ($queued) {
             $importState = 'Queue: ' . htmlspecialchars_uni($queued['state']);
         } elseif ($imported) {
-            $importState = 'Reserved / uncertain';
+            $importState = !empty($imported['imported_at']) ? 'Previously handled (' . htmlspecialchars_uni($imported['disposition']) . ')' : 'Reserved / uncertain';
         } else {
             $importState = 'New';
         }
@@ -776,6 +827,7 @@ function feedpublisher_admin_initial_preview($values)
             . '<div style="padding:0 12px 14px">'
             . '<table style="width:100%;border-collapse:collapse;margin-bottom:14px">'
             . '<tr><th style="width:170px;text-align:left;padding:6px;border-bottom:1px solid #ddd">Initial action</th><td style="padding:6px;border-bottom:1px solid #ddd">' . htmlspecialchars_uni($action) . '</td></tr>'
+            . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Eligibility</th><td style="padding:6px;border-bottom:1px solid #ddd">' . (!empty($entry['eligibility']['eligible']) ? 'Pass' : 'Reject') . ': ' . htmlspecialchars_uni($entry['eligibility']['reason']) . '</td></tr>'
             . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Entry</th><td style="padding:6px;border-bottom:1px solid #ddd"><strong>' . htmlspecialchars_uni($item['title']) . '</strong><br><small>' . htmlspecialchars_uni($item['url']) . '</small></td></tr>'
             . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Duplicate identity</th><td style="padding:6px;border-bottom:1px solid #ddd">' . htmlspecialchars_uni($identity['basis']) . '<br><small>Key: ' . htmlspecialchars_uni($itemKey ?: 'unavailable') . ' &middot; Match: ' . htmlspecialchars_uni($importState === 'New' ? 'none found' : $importState) . '</small></td></tr>'
             . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Source time</th><td style="padding:6px;border-bottom:1px solid #ddd">'

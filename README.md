@@ -63,6 +63,14 @@ missing from a successful, non-empty feed scan. It is suppressed whenever the
 feed's entry count unexpectedly shrinks. These policies never delete or modify
 published MyBB threads or posts.
 
+Per-feed eligibility rules can include or exclude entries by title, source URL,
+category/tag, or body using plain case-insensitive substrings or bounded regular
+expressions. Optional source-age, non-empty-body, and image/media requirements
+run before initial-policy selection and queue staging. Dry run reports the exact
+decision. Filtered and initially skipped identities are retained independently
+of removable queue history; changing filters requires explicit re-evaluation
+and resets only prior filter rejections.
+
 Cleanup runs on source HTML before safe MyCode conversion. Each feed can remove
 common byline/source blocks, up to 50 simple element selectors, and up to 20
 validated removal-only regular expressions. Supported selectors are `tag`,

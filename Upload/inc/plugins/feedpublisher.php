@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://sickgaming.net',
         'author' => 'SickProdigy',
         'authorsite' => 'https://sickgaming.net',
-        'version' => '0.1.21',
+        'version' => '0.1.22',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -61,6 +61,11 @@ function feedpublisher_install()
             `dedupe_retention_days` smallint unsigned NOT NULL DEFAULT 0,
             `strict_reconciliation` tinyint(1) NOT NULL DEFAULT 0,
             `last_feed_item_count` int unsigned NOT NULL DEFAULT 0,
+            `eligibility_rules` text NULL,
+            `minimum_source_age_hours` smallint unsigned NOT NULL DEFAULT 0,
+            `maximum_source_age_days` smallint unsigned NOT NULL DEFAULT 0,
+            `require_entry_body` tinyint(1) NOT NULL DEFAULT 0,
+            `require_entry_media` tinyint(1) NOT NULL DEFAULT 0,
             `enabled` tinyint(1) NOT NULL DEFAULT 0,
             `interval_minutes` smallint unsigned NOT NULL DEFAULT 60,
             `publish_interval_minutes` smallint unsigned NOT NULL DEFAULT 60,
@@ -92,6 +97,7 @@ function feedpublisher_install()
             `feed_id` int unsigned NOT NULL,
             `item_key` char(64) NOT NULL,
             `source_url` varchar(2048) NOT NULL DEFAULT '',
+            `disposition` varchar(16) NOT NULL DEFAULT 'published',
             `tid` int unsigned NOT NULL DEFAULT 0,
             `pid` int unsigned NOT NULL DEFAULT 0,
             `imported_at` int unsigned NOT NULL,
@@ -126,6 +132,11 @@ function feedpublisher_upgrade_schema()
         'dedupe_retention_days' => "smallint unsigned NOT NULL DEFAULT 0 AFTER `terminal_retention_count`",
         'strict_reconciliation' => "tinyint(1) NOT NULL DEFAULT 0 AFTER `dedupe_retention_days`",
         'last_feed_item_count' => "int unsigned NOT NULL DEFAULT 0 AFTER `strict_reconciliation`",
+        'eligibility_rules' => "text NULL AFTER `last_feed_item_count`",
+        'minimum_source_age_hours' => "smallint unsigned NOT NULL DEFAULT 0 AFTER `eligibility_rules`",
+        'maximum_source_age_days' => "smallint unsigned NOT NULL DEFAULT 0 AFTER `minimum_source_age_hours`",
+        'require_entry_body' => "tinyint(1) NOT NULL DEFAULT 0 AFTER `maximum_source_age_days`",
+        'require_entry_media' => "tinyint(1) NOT NULL DEFAULT 0 AFTER `require_entry_body`",
         'interval_minutes' => "smallint unsigned NOT NULL DEFAULT 60 AFTER `enabled`",
         'publish_interval_minutes' => "smallint unsigned NOT NULL DEFAULT 60 AFTER `interval_minutes`",
         'max_posts_per_run' => "smallint unsigned NOT NULL DEFAULT 1 AFTER `publish_interval_minutes`",
@@ -147,6 +158,9 @@ function feedpublisher_upgrade_schema()
         if (!$db->field_exists($name, 'feedpublisher_feeds')) {
             $db->add_column('feedpublisher_feeds', $name, $definition);
         }
+    }
+    if ($db->table_exists('feedpublisher_items') && !$db->field_exists('disposition', 'feedpublisher_items')) {
+        $db->add_column('feedpublisher_items', 'disposition', "varchar(16) NOT NULL DEFAULT 'published' AFTER `source_url`");
     }
 
     if (!$db->table_exists('feedpublisher_queue')) {

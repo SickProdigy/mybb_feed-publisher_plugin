@@ -247,6 +247,23 @@ $suite->test('cleanup rules validate selectors and regexes', function ($t) {
     $t->assertTrue(count($errors) >= 2, 'Invalid selector and regex should both be reported.');
 });
 
+$suite->test('entry eligibility explains include, exclude, age, and content decisions', function ($t) {
+    $item = array('title' => 'Free weekend game', 'url' => 'https://example.com/game', 'content' => '<p>Play now</p>',
+        'categories' => array('Giveaways'), 'has_media' => true, 'published' => TIME_NOW - 86400);
+    $feed = array('eligibility_rules' => "include category: giveaways\nexclude title: sponsored",
+        'minimum_source_age_hours' => 12, 'maximum_source_age_days' => 7, 'require_entry_body' => 1, 'require_entry_media' => 1);
+    $pass = feedpublisher_entry_eligibility($feed, $item);
+    $t->assertSame(true, $pass['eligible']);
+    $blocked = $item; $blocked['title'] = 'Sponsored free weekend';
+    $blockedResult = feedpublisher_entry_eligibility($feed, $blocked);
+    $t->assertSame(false, $blockedResult['eligible']);
+    $t->assertContains('exclude title: sponsored', $blockedResult['reason']);
+    $missingMedia = $item; $missingMedia['has_media'] = false;
+    $t->assertContains('media', feedpublisher_entry_eligibility($feed, $missingMedia)['reason']);
+    $errors = array(); feedpublisher_eligibility_rules('include-regex title: ~[~', $errors);
+    $t->assertSame(1, count($errors));
+});
+
 $suite->test('title prefix preserves MyBB 85-character subject limit', function ($t) {
     $subject = feedpublisher_build_subject(str_repeat('x', 100), '[RSS]');
     $t->assertSame(85, my_strlen($subject));
@@ -309,6 +326,8 @@ $suite->test('RSS, RDF, and Atom fixtures parse with format metadata', function 
     $metadata = array();
     $rss = feedpublisher_parse(file_get_contents(__DIR__ . '/fixtures/rss.xml'), array(), $metadata);
     $t->assertSame('fixture-rss-1', $rss[0]['key']);
+    $t->assertSame(array('Giveaways'), $rss[0]['categories']);
+    $t->assertSame(true, $rss[0]['has_media']);
     $t->assertSame('RSS 2.0', $metadata['format']);
     $legacy = feedpublisher_parse(file_get_contents(__DIR__ . '/fixtures/rss-092.xml'), array(), $metadata);
     $t->assertSame('https://example.com/legacy-entry', $legacy[0]['key']);
@@ -371,6 +390,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
     $t->assertContains("feedpublisher_install_logs_table", $source);
+    $t->assertContains("'disposition'", $source);
     $t->assertContains("drop_table('feedpublisher_logs')", $source);
     $t->assertContains("delete_query('tasks'", $source);
 });

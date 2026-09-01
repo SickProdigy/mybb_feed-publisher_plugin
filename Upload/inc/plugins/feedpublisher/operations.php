@@ -19,11 +19,7 @@ function feedpublisher_discover_feed($feed)
         $xml = feedpublisher_fetch($feed['url'], 2097152, $fetchMetadata);
         $items = feedpublisher_parse($xml, $fetchMetadata);
         $initializing = empty($feed['initialized_at']);
-        $plan = $initializing
-            ? feedpublisher_initial_stage_plan($feed, $items)
-            : array_map(function ($item) {
-                return array('item' => $item, 'state' => 'queued');
-            }, $items);
+        $plan = feedpublisher_eligibility_stage_plan($feed, $items, $initializing);
         $initialComplete = true;
         foreach ($plan as $entry) {
             $result = feedpublisher_queue_stage($feed, $entry['item'], $entry['state']);
