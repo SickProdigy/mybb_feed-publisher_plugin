@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.18 - 2026-09-01
+
+- Add per-feed GUID/link, normalized-title, content-fingerprint, and combined
+  duplicate identity strategies with explicit versioned normalization.
+- Preserve existing GUID/link keys by default, accept otherwise valid keyless
+  entries for fallback strategies, and keep queue/import uniqueness safeguards.
+- Require explicit queue/history reset confirmation for strategy changes and
+  explain the derived identity and existing match in dry-run previews.
+
 ## 0.1.17 - 2026-09-01
 
 - Expand parsing across RSS 0.9x, RSS 1.0 RDF, RSS 2.0, and Atom while handling

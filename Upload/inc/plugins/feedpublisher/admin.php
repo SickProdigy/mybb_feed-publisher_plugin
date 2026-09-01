@@ -148,6 +148,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'thread_date_mode' => 'publish',
         'future_date_policy' => 'hold',
         'schedule_jitter_minutes' => 0,
+        'identity_strategy' => 'guid_link',
         'enabled' => 0,
         'interval_minutes' => 60,
         'publish_interval_minutes' => 60,
@@ -208,6 +209,15 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->output_row('Thread date', 'Choose whether MyBB shows when Feed Publisher created the thread or the valid publication date supplied by the feed.', $form->generate_select_box('thread_date_mode', array('publish' => 'Time posted to MyBB', 'source' => 'Original feed publication time'), $values['thread_date_mode']));
     $container->output_row('Future-dated entries', 'Choose what happens when a feed says an entry is scheduled for a future time.', $form->generate_select_box('future_date_policy', array('hold' => 'Hold until that time', 'clamp' => 'Publish normally using the current time', 'skip' => 'Mark as seen; do not publish', 'reject' => 'Reject permanently'), $values['future_date_policy']));
     $container->output_row('Scheduling spread', 'Optionally delay newly queued entries by a repeatable 0 to this many minutes (maximum 60). Normal publication pacing still applies.', $form->generate_numeric_field('schedule_jitter_minutes', (int) $values['schedule_jitter_minutes'], array('min' => 0, 'max' => 60)));
+    $container->output_row('Duplicate identity', 'Controls how Feed Publisher recognizes an entry it has already seen. GUID/link is safest and remains the default. Title or content fallbacks help broken feeds but can match unrelated entries.', $form->generate_select_box('identity_strategy', array(
+        'guid_link' => 'GUID or link (recommended)',
+        'title' => 'Normalized title',
+        'content' => 'Normalized content fingerprint',
+        'title_content' => 'Normalized title + content fingerprint',
+    ), $values['identity_strategy']));
+    if (!empty($values['id'])) {
+        $container->output_row('Duplicate identity change', 'Changing the strategy cannot safely translate old hashes. Resetting removes this feed\'s queue and duplicate history, but does not delete existing MyBB threads; previously published entries may become eligible again.', $form->generate_check_box('reset_identity_history', 1, 'Confirm identity-strategy change and reset queue/import history.'));
+    }
     $container->output_row('Source attribution <em>*</em>', 'Append a source link to every imported thread. Keeping attribution enabled is recommended.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
     $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent queues one; recent count queues a bounded number; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only', 'recent' => 'Recent count', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
     $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
@@ -253,6 +263,8 @@ function feedpublisher_admin_save()
         'thread_date_mode' => $mybb->get_input('thread_date_mode'),
         'future_date_policy' => $mybb->get_input('future_date_policy'),
         'schedule_jitter_minutes' => $mybb->get_input('schedule_jitter_minutes', MyBB::INPUT_INT),
+        'identity_strategy' => $mybb->get_input('identity_strategy'),
+        'reset_identity_history' => $mybb->get_input('reset_identity_history', MyBB::INPUT_INT) ? 1 : 0,
         'interval_minutes' => $mybb->get_input('interval_minutes', MyBB::INPUT_INT),
         'publish_interval_minutes' => $mybb->get_input('publish_interval_minutes', MyBB::INPUT_INT),
         'max_posts_per_run' => $mybb->get_input('max_posts_per_run', MyBB::INPUT_INT),
@@ -306,6 +318,9 @@ function feedpublisher_admin_save()
     if ($values['schedule_jitter_minutes'] < 0 || $values['schedule_jitter_minutes'] > 60) {
         $errors[] = 'Scheduling spread must be between 0 and 60 minutes.';
     }
+    if (!in_array($values['identity_strategy'], array('guid_link', 'title', 'content', 'title_content'), true)) {
+        $errors[] = 'Select a valid duplicate identity strategy.';
+    }
     if ($values['interval_minutes'] < 5 || $values['interval_minutes'] > 10080) {
         $errors[] = 'The import interval must be between 5 and 10080 minutes.';
     }
@@ -337,6 +352,16 @@ function feedpublisher_admin_save()
     $policyChanged = $currentFeed && !empty($currentFeed['initialized_at'])
         && ($values['initial_policy'] !== $currentFeed['initial_policy']
             || ($values['initial_policy'] === 'recent' && $values['initial_limit'] !== (int) $currentFeed['initial_limit']));
+    $identityChanged = $currentFeed && $values['identity_strategy'] !== $currentFeed['identity_strategy'];
+    if ($identityChanged && !$values['reset_identity_history']) {
+        $errors[] = 'Confirm the queue/import-history reset before changing the duplicate identity strategy.';
+    }
+    if ($identityChanged && $values['reset_identity_history']) {
+        $processing = (int) $db->fetch_field($db->simple_select('feedpublisher_queue', 'COUNT(id) AS total', "feed_id=" . $id . " AND state='processing'"), 'total');
+        if ($processing > 0) {
+            $errors[] = 'Wait for processing queue claims to finish before changing the duplicate identity strategy.';
+        }
+    }
     if ($policyChanged && $values['reset_initial_policy']) {
         $processing = (int) $db->fetch_field($db->simple_select('feedpublisher_queue', 'COUNT(id) AS total', "feed_id=" . $id . " AND state='processing'"), 'total');
         if ($processing > 0) {
@@ -368,6 +393,7 @@ function feedpublisher_admin_save()
         'thread_date_mode' => $db->escape_string($values['thread_date_mode']),
         'future_date_policy' => $db->escape_string($values['future_date_policy']),
         'schedule_jitter_minutes' => $values['schedule_jitter_minutes'],
+        'identity_strategy' => $db->escape_string($values['identity_strategy']),
         'enabled' => $values['enabled'],
         'interval_minutes' => $values['interval_minutes'],
         'publish_interval_minutes' => $values['publish_interval_minutes'],
@@ -388,6 +414,10 @@ function feedpublisher_admin_save()
         $db->update_query('feedpublisher_feeds', $record, 'id=' . $id);
         if ($policyChanged && $values['reset_initial_policy']) {
             $db->delete_query('feedpublisher_queue', "feed_id=" . $id . " AND state IN ('queued','skipped','failed')");
+        }
+        if ($identityChanged && $values['reset_identity_history']) {
+            $db->delete_query('feedpublisher_queue', 'feed_id=' . $id);
+            $db->delete_query('feedpublisher_items', 'feed_id=' . $id);
         }
         flash_message('The feed was updated.', 'success');
     } else {
@@ -492,7 +522,8 @@ function feedpublisher_admin_initial_preview($values)
         }
         $statusIcon = $willPublish ? '&#x1F7E2;' : '&#x1F534;';
         $panelClass = $willPublish ? 'fp-preview-publish' : 'fp-preview-skip';
-        $itemKey = feedpublisher_item_key($item['key']);
+        $identity = feedpublisher_derive_item_identity($values, $item);
+        $itemKey = $identity['key'];
         $condition = 'feed_id=' . (int) $values['id'] . " AND item_key='" . $db->escape_string($itemKey) . "'";
         $imported = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_items', 'tid,pid,imported_at', $condition, array('limit' => 1))) : null;
         $queued = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_queue', 'state,tid,pid', $condition, array('limit' => 1))) : null;
@@ -512,6 +543,7 @@ function feedpublisher_admin_initial_preview($values)
             . '<table style="width:100%;border-collapse:collapse;margin-bottom:14px">'
             . '<tr><th style="width:170px;text-align:left;padding:6px;border-bottom:1px solid #ddd">Initial action</th><td style="padding:6px;border-bottom:1px solid #ddd">' . htmlspecialchars_uni($action) . '</td></tr>'
             . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Entry</th><td style="padding:6px;border-bottom:1px solid #ddd"><strong>' . htmlspecialchars_uni($item['title']) . '</strong><br><small>' . htmlspecialchars_uni($item['url']) . '</small></td></tr>'
+            . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Duplicate identity</th><td style="padding:6px;border-bottom:1px solid #ddd">' . htmlspecialchars_uni($identity['basis']) . '<br><small>Key: ' . htmlspecialchars_uni($itemKey ?: 'unavailable') . ' &middot; Match: ' . htmlspecialchars_uni($importState === 'New' ? 'none found' : $importState) . '</small></td></tr>'
             . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Source time</th><td style="padding:6px;border-bottom:1px solid #ddd">'
             . ($datePlan['source_time'] ? my_date('normal', $datePlan['source_time']) : 'Missing or outside the supported 1980 to one-year-future range') . '</td></tr>'
             . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Effective queue time</th><td style="padding:6px;border-bottom:1px solid #ddd">'

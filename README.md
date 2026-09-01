@@ -45,6 +45,15 @@ ordering preference. Due queue entries are published as threads by the configure
 MyBB user after the destination forum and effective posting permissions are
 validated at runtime.
 
+Duplicate detection defaults to normalized GUID/link identity for backward
+compatibility. Feeds with missing or unstable identifiers may instead use a
+versioned normalized title, normalized content fingerprint, or a conservative
+title-plus-content fingerprint. Title matching can merge unrelated entries with
+the same headline; content matching treats meaningful edits as new entries; the
+combined strategy avoids more false matches but will not recognize edited
+copies. Changing strategy requires an explicit queue/import-history reset and
+may make previously published source entries eligible again.
+
 Cleanup runs on source HTML before safe MyCode conversion. Each feed can remove
 common byline/source blocks, up to 50 simple element selectors, and up to 20
 validated removal-only regular expressions. Supported selectors are `tag`,

@@ -62,7 +62,11 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
     }
 
     $feedId = (int) $feed['id'];
-    $itemKey = feedpublisher_item_key($item['key']);
+    $identity = feedpublisher_derive_item_identity($feed, $item);
+    if ($identity['key'] === '') {
+        return 'rejected';
+    }
+    $itemKey = $identity['key'];
     $condition = "feed_id={$feedId} AND item_key='" . $db->escape_string($itemKey) . "'";
     $existing = $db->fetch_field($db->simple_select(
         'feedpublisher_queue',

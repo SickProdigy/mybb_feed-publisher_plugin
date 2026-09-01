@@ -238,7 +238,7 @@ function feedpublisher_parse($xml, $fetchMetadata = array(), &$parseMetadata = n
     }
 
     $items = array_values(array_filter($items, function ($item) {
-        return $item['key'] !== '' && $item['title'] !== '';
+        return $item['title'] !== '' && ($item['key'] !== '' || trim($item['content']) !== '');
     }));
     if (count($items) > 1000) {
         throw new FeedPublisherException('parse', 'The feed contains more than 1,000 entries.');
@@ -470,6 +470,38 @@ function feedpublisher_normalize_item_identity($identity)
 function feedpublisher_item_key($identity)
 {
     return hash('sha256', feedpublisher_normalize_item_identity($identity));
+}
+
+function feedpublisher_normalize_identity_text($value)
+{
+    $value = html_entity_decode(strip_tags((string) $value), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $value = preg_replace('/\s+/u', ' ', trim($value));
+    return function_exists('mb_strtolower') ? mb_strtolower($value, 'UTF-8') : strtolower($value);
+}
+
+function feedpublisher_derive_item_identity($feed, $item)
+{
+    $strategy = isset($feed['identity_strategy']) ? $feed['identity_strategy'] : 'guid_link';
+    $title = feedpublisher_normalize_identity_text(isset($item['title']) ? $item['title'] : '');
+    $content = feedpublisher_normalize_identity_text(isset($item['content']) ? $item['content'] : '');
+    if ($strategy === 'title') {
+        $identity = 'fp-title-v1|' . $title;
+        $basis = 'normalized title (v1)';
+    } elseif ($strategy === 'content') {
+        $identity = 'fp-content-v1|' . hash('sha256', $content);
+        $basis = 'normalized content fingerprint (v1)';
+    } elseif ($strategy === 'title_content') {
+        $identity = 'fp-title-content-v1|' . $title . '|' . hash('sha256', $content);
+        $basis = 'normalized title and content fingerprint (v1)';
+    } else {
+        $strategy = 'guid_link';
+        $identity = isset($item['key']) ? $item['key'] : '';
+        $basis = 'normalized GUID or link';
+    }
+    if ($identity === '' || ($strategy !== 'guid_link' && $title === '' && $content === '')) {
+        return array('strategy' => $strategy, 'identity' => '', 'key' => '', 'basis' => $basis);
+    }
+    return array('strategy' => $strategy, 'identity' => $identity, 'key' => feedpublisher_item_key($identity), 'basis' => $basis);
 }
 
 function feedpublisher_cleanup_rule_lines($rules)

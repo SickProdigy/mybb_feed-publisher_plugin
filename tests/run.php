@@ -195,6 +195,18 @@ $suite->test('identity normalization and stable keys', function ($t) {
     $t->assertSame(feedpublisher_item_key($a), feedpublisher_item_key($b));
 });
 
+$suite->test('versioned fallback identities are deterministic', function ($t) {
+    $item = array('key' => '', 'title' => '  Same &amp; TITLE ', 'content' => '<p>Hello   World</p>');
+    $title = feedpublisher_derive_item_identity(array('identity_strategy' => 'title'), $item);
+    $content = feedpublisher_derive_item_identity(array('identity_strategy' => 'content'), $item);
+    $combined = feedpublisher_derive_item_identity(array('identity_strategy' => 'title_content'), $item);
+    $t->assertSame(feedpublisher_item_key('fp-title-v1|same & title'), $title['key']);
+    $t->assertContains('v1', $title['basis']);
+    $t->assertTrue($content['key'] !== $combined['key']);
+    $legacy = feedpublisher_derive_item_identity(array('identity_strategy' => 'guid_link'), array('key' => 'https://example.com/a', 'title' => '', 'content' => ''));
+    $t->assertSame(feedpublisher_item_key('https://example.com/a'), $legacy['key']);
+});
+
 $suite->test('safe content URLs reject executable schemes', function ($t) {
     $t->assertSame(false, feedpublisher_safe_content_url('javascript:alert(1)'));
     $t->assertSame(false, feedpublisher_safe_content_url('data:text/html,bad'));
