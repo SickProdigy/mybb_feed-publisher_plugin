@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.17 - 2026-09-01
+
+- Expand parsing across RSS 0.9x, RSS 1.0 RDF, RSS 2.0, and Atom while handling
+  common namespaces, CDATA content, date variants, Atom alternate/enclosure
+  links, inherited `xml:base`, and relative entry URLs.
+- Detect HTTP, BOM, and XML character encodings, normalize supported input to
+  UTF-8, and reject unsupported or conflicting declarations before staging.
+- Permit mislabeled feed responses only after bounded XML-shape validation,
+  retain entity, document-size, depth, and node protections, and show detected
+  feed format and source encoding in dry-run previews.
+
 ## 0.1.16 - 2026-09-01
 
 - Add dependency-free regression tests for parsing fixtures, sanitization and

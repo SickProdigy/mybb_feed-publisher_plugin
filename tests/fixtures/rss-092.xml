@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="0.92">
+  <channel>
+    <title>Fixture RSS 0.92</title>
+    <item>
+      <title>Legacy RSS fixture entry</title>
+      <link>https://example.com/legacy-entry</link>
+      <description><![CDATA[<p>Legacy RSS content.</p>]]></description>
+    </item>
+  </channel>
+</rss>

@@ -11,7 +11,7 @@ Early development preview. The initial foundation includes:
 - plugin install/uninstall lifecycle;
 - feed and imported-item database tables;
 - a MyBB scheduled task entry point;
-- RSS 2.0 and Atom parsing;
+- RSS 0.9x/1.0 RDF/2.0 and Atom parsing with bounded encoding normalization;
 - deterministic HTML cleanup and HTML-to-MyCode conversion;
 - URL validation, response-size limits, timeouts, and duplicate detection;
 - Admin CP feed management with destination forum, posting user, enabled state,
@@ -29,6 +29,7 @@ Early development preview. The initial foundation includes:
 - MyBB 1.8.x
 - PHP 7.4 or newer
 - PHP cURL, DOM, SimpleXML, and libxml extensions
+- PHP mbstring or iconv for non-UTF-8 feeds
 
 ## Install
 
@@ -51,7 +52,8 @@ validated removal-only regular expressions. Supported selectors are `tag`,
 per line. The initial-selection preview displays the resulting cleaned MyCode.
 Saved feeds also have a direct **Preview** action. Both preview paths are dry
 runs: they use the production fetch, parse, cleanup, and conversion pipeline,
-show existing import/queue state, and do not write plugin or forum data.
+show detected feed format and source encoding plus existing import/queue state,
+and do not write plugin or forum data.
 
 Each feed may prepend arbitrary safe text such as `[RSS]` to generated subjects
 and may independently select a built-in MyBB thread prefix available to its
@@ -96,9 +98,11 @@ on a real MyBB installation.
 ## Known limitations
 
 - Feed redirects are rejected rather than followed.
-- Feed responses are limited to accepted XML content types and 2 MiB.
-- The current parser targets RSS 2.0 and Atom; broader feed and encoding support
-  is tracked separately.
+- Feed responses are limited to 2 MiB. Incorrect content-type headers are
+  tolerated only when the bounded response begins as a supported XML feed;
+  HTML and unsupported XML remain rejected.
+- Supported source encodings are UTF-8, BOM-marked UTF-16, ISO-8859-1, and
+  Windows-1252. Conflicting HTTP, BOM, and XML declarations are rejected.
 - Remote media attachments, full-article extraction, moderation, and AI cleanup
   are not part of the current Core MVP.
 - Automated test doubles cannot replace the documented MyBB database, task,

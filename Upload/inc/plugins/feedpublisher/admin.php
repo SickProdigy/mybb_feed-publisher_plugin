@@ -442,7 +442,10 @@ function feedpublisher_admin_initial_preview($values)
     global $db, $page;
 
     try {
-        $items = feedpublisher_parse(feedpublisher_fetch($values['url']));
+        $fetchMetadata = array();
+        $parseMetadata = array();
+        $xml = feedpublisher_fetch($values['url'], 2097152, $fetchMetadata);
+        $items = feedpublisher_parse($xml, $fetchMetadata, $parseMetadata);
         $plan = feedpublisher_initial_stage_plan($values, $items);
     } catch (Throwable $exception) {
         feedpublisher_admin_form($values['id'] ? 'edit' : 'add', $values, array(
@@ -469,7 +472,11 @@ function feedpublisher_admin_initial_preview($values)
         . '</style>';
     echo '<div style="margin:12px 0"><strong>Initial policy:</strong> ' . htmlspecialchars_uni($values['initial_policy'])
         . ' &middot; <strong>Maximum posts per run:</strong> ' . (int) $values['max_posts_per_run']
-        . ' &middot; <strong>Previewed entries:</strong> ' . min(100, count($plan)) . '</div>';
+        . ' &middot; <strong>Previewed entries:</strong> ' . min(100, count($plan))
+        . ' &middot; <strong>Feed format:</strong> ' . htmlspecialchars_uni($parseMetadata['format'])
+        . ' &middot; <strong>Source encoding:</strong> ' . htmlspecialchars_uni($parseMetadata['encoding'])
+        . (!empty($parseMetadata['content_type_fallback']) ? ' &middot; <strong>Content type:</strong> accepted after XML validation' : '')
+        . '</div>';
     foreach (array_slice($plan, 0, 100) as $index => $entry) {
         $item = $entry['item'];
         $datePlan = isset($entry['date_plan']) ? $entry['date_plan'] : feedpublisher_source_date_plan($values, $item);

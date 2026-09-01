@@ -269,12 +269,37 @@ $suite->test('publication failure releases reservation and requeues item', funct
     $t->assertContains('publisher failed', $db->queue[1]['last_error']);
 });
 
-$suite->test('RSS and Atom fixtures parse', function ($t) {
+$suite->test('RSS, RDF, and Atom fixtures parse with format metadata', function ($t) {
     if (!extension_loaded('SimpleXML') || !extension_loaded('dom')) { $t->skip('PHP SimpleXML and DOM are not installed.'); }
-    $rss = feedpublisher_parse(file_get_contents(__DIR__ . '/fixtures/rss.xml'));
-    $atom = feedpublisher_parse(file_get_contents(__DIR__ . '/fixtures/atom.xml'));
+    $metadata = array();
+    $rss = feedpublisher_parse(file_get_contents(__DIR__ . '/fixtures/rss.xml'), array(), $metadata);
     $t->assertSame('fixture-rss-1', $rss[0]['key']);
+    $t->assertSame('RSS 2.0', $metadata['format']);
+    $legacy = feedpublisher_parse(file_get_contents(__DIR__ . '/fixtures/rss-092.xml'), array(), $metadata);
+    $t->assertSame('https://example.com/legacy-entry', $legacy[0]['key']);
+    $t->assertSame('RSS 0.92', $metadata['format']);
+    $rdf = feedpublisher_parse(file_get_contents(__DIR__ . '/fixtures/rss-rdf.xml'), array('url' => 'https://example.com/root/feed.rdf'), $metadata);
+    $t->assertSame('rdf-entry', $rdf[0]['key']);
+    $t->assertSame('https://example.com/news/posts/rdf-entry?source=feed', $rdf[0]['url']);
+    $t->assertSame('RSS 1.0 (RDF)', $metadata['format']);
+    $atom = feedpublisher_parse(file_get_contents(__DIR__ . '/fixtures/atom.xml'), array('url' => 'https://fallback.example/feed'), $metadata);
     $t->assertSame('fixture-atom-1', $atom[0]['key']);
+    $t->assertSame('https://example.com/articles/atom-entry?view=full#content', $atom[0]['url']);
+    $t->assertSame('Atom', $metadata['format']);
+});
+
+$suite->test('feed encodings normalize to UTF-8 and conflicts fail closed', function ($t) {
+    $detected = '';
+    $latin = "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><rss version=\"2.0\"><channel><title>Caf\xE9</title></channel></rss>";
+    $normalized = feedpublisher_normalize_xml_encoding($latin, 'ISO-8859-1', $detected);
+    $t->assertSame('ISO-8859-1', $detected);
+    $t->assertContains('Caf' . "\xC3\xA9", $normalized);
+    $t->expectException('FeedPublisherException', function () use ($latin) { feedpublisher_normalize_xml_encoding($latin, 'UTF-8'); });
+    $t->expectException('FeedPublisherException', function () { feedpublisher_normalize_xml_encoding('<?xml version="1.0" encoding="KOI8-R"?><rss/>'); });
+});
+
+$suite->test('relative content URLs preserve query strings and fragments', function ($t) {
+    $t->assertSame('https://example.com/a/post?q=1#part', feedpublisher_resolve_relative_content_url('../post?q=1#part', 'https://example.com/a/b/feed.xml'));
 });
 
 $suite->test('malformed and entity-bearing XML fail closed', function ($t) {

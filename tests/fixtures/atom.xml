@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://example.com/feeds/">
   <title>Fixture Atom</title>
   <entry>
     <id>fixture-atom-1</id>
     <title>Atom fixture entry</title>
-    <link rel="alternate" href="https://example.com/atom-entry" />
+    <link rel="enclosure" href="media/audio.mp3" />
+    <link rel="alternate" xml:base="../articles/" href="atom-entry?view=full#content" />
     <published>2026-09-01T12:00:00Z</published>
     <content type="html">&lt;p&gt;Hello &lt;em&gt;Atom&lt;/em&gt;.&lt;/p&gt;</content>
   </entry>

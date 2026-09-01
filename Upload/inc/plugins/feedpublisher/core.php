@@ -77,7 +77,7 @@ function feedpublisher_validate_url($url)
     }
 }
 
-function feedpublisher_fetch($url, $maxBytes = 2097152)
+function feedpublisher_fetch($url, $maxBytes = 2097152, &$metadata = null)
 {
     if (!function_exists('curl_init')) {
         throw new FeedPublisherException('fetch', 'The PHP cURL extension is required.');
@@ -129,14 +129,27 @@ function feedpublisher_fetch($url, $maxBytes = 2097152)
         throw new FeedPublisherException('fetch', 'The feed request failed' . ($error ? ': ' . $error : ' with HTTP ' . $status) . '.');
     }
     $mediaType = trim(strtok($contentType, ';'));
-    if (!in_array($mediaType, array('application/rss+xml', 'application/atom+xml', 'application/xml', 'text/xml'), true)) {
+    $acceptedTypes = array('application/rss+xml', 'application/atom+xml', 'application/rdf+xml', 'application/xml', 'text/xml');
+    $looksLikeXml = preg_match('/^(?:\xEF\xBB\xBF)?\s*(?:<\?xml\b|<(?:rss|feed|rdf:RDF)\b)/i', $body) === 1;
+    if (!in_array($mediaType, $acceptedTypes, true) && !$looksLikeXml) {
         throw new FeedPublisherException('content-type', 'The feed response did not use an accepted XML content type.');
     }
+
+    $charset = '';
+    if (preg_match('/(?:^|;)\s*charset\s*=\s*["\']?([^;"\']+)/i', $contentType, $match)) {
+        $charset = trim($match[1]);
+    }
+    $metadata = array(
+        'url' => $url,
+        'content_type' => $mediaType,
+        'http_charset' => $charset,
+        'content_type_fallback' => !in_array($mediaType, $acceptedTypes, true),
+    );
 
     return $body;
 }
 
-function feedpublisher_parse($xml)
+function feedpublisher_parse($xml, $fetchMetadata = array(), &$parseMetadata = null)
 {
     if (strlen($xml) > 2097152) {
         throw new FeedPublisherException('parse', 'The XML document exceeded the 2 MiB size limit.');
@@ -144,50 +157,84 @@ function feedpublisher_parse($xml)
     if (stripos($xml, '<!DOCTYPE') !== false) {
         throw new FeedPublisherException('parse', 'XML document type declarations are not allowed.');
     }
+    $encoding = '';
+    $xml = feedpublisher_normalize_xml_encoding($xml, isset($fetchMetadata['http_charset']) ? $fetchMetadata['http_charset'] : '', $encoding);
+    if (stripos($xml, '<!DOCTYPE') !== false) {
+        throw new FeedPublisherException('parse', 'XML document type declarations are not allowed.');
+    }
+
     $previous = libxml_use_internal_errors(true);
     $document = simplexml_load_string($xml, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA);
     libxml_clear_errors();
     libxml_use_internal_errors($previous);
-
     if ($document === false) {
-        throw new FeedPublisherException('parse', 'The response is not valid XML.');
+        throw new FeedPublisherException('parse', 'The response is not valid XML after encoding normalization.');
     }
-    $nodeCount = 0;
+
     $rootNode = dom_import_simplexml($document);
+    $nodeCount = 0;
     if (!$rootNode || !feedpublisher_xml_within_limits($rootNode, 0, $nodeCount)) {
         throw new FeedPublisherException('parse', 'The XML structure exceeded the depth or node limit.');
     }
+    $format = feedpublisher_detect_feed_format($rootNode);
+    if ($format === '') {
+        throw new FeedPublisherException('parse', 'The XML document is not a supported RSS, RDF, or Atom feed.');
+    }
+    $parseMetadata = array(
+        'format' => $format,
+        'encoding' => $encoding,
+        'content_type_fallback' => !empty($fetchMetadata['content_type_fallback']),
+    );
 
+    $xpath = new DOMXPath($rootNode->ownerDocument);
+    $query = $format === 'Atom' ? '//*[local-name()="entry"]' : '//*[local-name()="item"]';
     $items = array();
-    if (isset($document->channel->item)) {
-        foreach ($document->channel->item as $item) {
-            $content = $item->children('http://purl.org/rss/1.0/modules/content/');
-            $items[] = array(
-                'key' => trim((string) ($item->guid ?: $item->link)),
-                'title' => trim((string) $item->title),
-                'url' => trim((string) $item->link),
-                'content' => (string) ($content->encoded ?: $item->description),
-                'published' => strtotime((string) $item->pubDate) ?: 0,
-            );
-        }
-    } else {
-        $document->registerXPathNamespace('atom', 'http://www.w3.org/2005/Atom');
-        foreach ($document->xpath('//atom:entry') ?: array() as $entry) {
+    foreach ($xpath->query($query) as $entry) {
+        $base = feedpublisher_dom_xml_base($entry, isset($fetchMetadata['url']) ? $fetchMetadata['url'] : '');
+        if ($format === 'Atom') {
             $link = '';
-            foreach ($entry->link as $candidate) {
-                $attributes = $candidate->attributes();
-                if (!$link || (string) $attributes['rel'] === 'alternate') {
-                    $link = (string) $attributes['href'];
+            $linkNode = null;
+            foreach ($xpath->query('./*[local-name()="link"]', $entry) as $candidate) {
+                $relation = strtolower(trim($candidate->getAttribute('rel')));
+                if ($relation === 'enclosure') {
+                    continue;
+                }
+                if ($link === '' || $relation === '' || $relation === 'alternate') {
+                    $link = $candidate->getAttribute('href');
+                    $linkNode = $candidate;
+                    if ($relation === '' || $relation === 'alternate') {
+                        break;
+                    }
                 }
             }
-            $items[] = array(
-                'key' => trim((string) ($entry->id ?: $link)),
-                'title' => trim((string) $entry->title),
-                'url' => trim($link),
-                'content' => (string) ($entry->content ?: $entry->summary),
-                'published' => strtotime((string) ($entry->published ?: $entry->updated)) ?: 0,
-            );
+            $linkBase = $linkNode instanceof DOMElement
+                ? feedpublisher_dom_xml_base($linkNode, $base)
+                : $base;
+            $link = feedpublisher_resolve_relative_content_url($link, $linkBase);
+            $key = feedpublisher_dom_first_text($entry, array('id'));
+            $title = feedpublisher_dom_first_text($entry, array('title'));
+            $content = feedpublisher_dom_first_text($entry, array('content', 'summary'));
+            $date = feedpublisher_dom_first_text($entry, array('published', 'updated'));
+        } else {
+            $link = feedpublisher_resolve_relative_content_url(feedpublisher_dom_first_text($entry, array('link')), $base);
+            $key = feedpublisher_dom_first_text($entry, array('guid', 'identifier'));
+            if ($key === '' && $entry->hasAttributeNS('http://www.w3.org/1999/02/22-rdf-syntax-ns#', 'about')) {
+                $key = $entry->getAttributeNS('http://www.w3.org/1999/02/22-rdf-syntax-ns#', 'about');
+            }
+            $title = feedpublisher_dom_first_text($entry, array('title'));
+            $content = feedpublisher_dom_first_text($entry, array('encoded', 'description', 'content'));
+            $date = feedpublisher_dom_first_text($entry, array('pubDate', 'date', 'published', 'updated'));
         }
+        if ($key === '') {
+            $key = $link;
+        }
+        $items[] = array(
+            'key' => trim($key),
+            'title' => trim($title),
+            'url' => trim($link),
+            'content' => $content,
+            'published' => feedpublisher_parse_source_date($date),
+        );
     }
 
     $items = array_values(array_filter($items, function ($item) {
@@ -197,6 +244,192 @@ function feedpublisher_parse($xml)
         throw new FeedPublisherException('parse', 'The feed contains more than 1,000 entries.');
     }
     return $items;
+}
+
+function feedpublisher_canonical_encoding($encoding)
+{
+    $encoding = strtoupper(str_replace(array('_', ' '), '-', trim((string) $encoding)));
+    $aliases = array('UTF8' => 'UTF-8', 'UTF-16' => 'UTF-16', 'UTF16' => 'UTF-16', 'UTF16LE' => 'UTF-16LE',
+        'UTF16BE' => 'UTF-16BE', 'ISO8859-1' => 'ISO-8859-1', 'LATIN1' => 'ISO-8859-1',
+        'WINDOWS1252' => 'WINDOWS-1252', 'CP1252' => 'WINDOWS-1252');
+    return isset($aliases[$encoding]) ? $aliases[$encoding] : $encoding;
+}
+
+function feedpublisher_normalize_xml_encoding($xml, $httpEncoding = '', &$detectedEncoding = '')
+{
+    $bomEncoding = '';
+    if (substr($xml, 0, 3) === "\xEF\xBB\xBF") {
+        $bomEncoding = 'UTF-8';
+        $xml = substr($xml, 3);
+    } elseif (substr($xml, 0, 2) === "\xFF\xFE") {
+        $bomEncoding = 'UTF-16LE';
+        $xml = substr($xml, 2);
+    } elseif (substr($xml, 0, 2) === "\xFE\xFF") {
+        $bomEncoding = 'UTF-16BE';
+        $xml = substr($xml, 2);
+    }
+    if ($bomEncoding === 'UTF-16LE' || $bomEncoding === 'UTF-16BE') {
+        $xml = feedpublisher_convert_to_utf8($xml, $bomEncoding);
+    }
+    $declared = '';
+    if (preg_match('/^\s*<\?xml\b[^>]*\bencoding\s*=\s*["\']([^"\']+)["\']/i', $xml, $match)) {
+        $declared = feedpublisher_canonical_encoding($match[1]);
+    }
+    $httpEncoding = feedpublisher_canonical_encoding($httpEncoding);
+    $bomEncoding = feedpublisher_canonical_encoding($bomEncoding);
+    $supported = array('', 'UTF-8', 'UTF-16', 'UTF-16LE', 'UTF-16BE', 'ISO-8859-1', 'WINDOWS-1252');
+    foreach (array($bomEncoding, $declared, $httpEncoding) as $candidate) {
+        if (!in_array($candidate, $supported, true)) {
+            throw new FeedPublisherException('parse', 'The feed declares an unsupported character encoding.');
+        }
+    }
+    $encodingsAgree = function ($left, $right) {
+        if ($left === '' || $right === '' || $left === $right) {
+            return true;
+        }
+        return ($left === 'UTF-16' && in_array($right, array('UTF-16LE', 'UTF-16BE'), true))
+            || ($right === 'UTF-16' && in_array($left, array('UTF-16LE', 'UTF-16BE'), true));
+    };
+    if (!$encodingsAgree($bomEncoding, $declared)
+        || !$encodingsAgree($bomEncoding, $httpEncoding)
+        || !$encodingsAgree($declared, $httpEncoding)) {
+        throw new FeedPublisherException('parse', 'The HTTP, BOM, and XML character encodings conflict.');
+    }
+    $sourceEncoding = $bomEncoding ?: ($declared ?: ($httpEncoding ?: 'UTF-8'));
+    if ($sourceEncoding !== 'UTF-8' && $bomEncoding === '') {
+        $xml = feedpublisher_convert_to_utf8($xml, $sourceEncoding);
+    }
+    if (preg_match('//u', $xml) !== 1) {
+        throw new FeedPublisherException('parse', 'The feed contains invalid text for its declared encoding.');
+    }
+    $xml = preg_replace('/^(\s*<\?xml\b[^>]*\bencoding\s*=\s*)["\'][^"\']+["\']/i', '$1"UTF-8"', $xml, 1);
+    $detectedEncoding = $sourceEncoding;
+    return $xml;
+}
+
+function feedpublisher_convert_to_utf8($value, $sourceEncoding)
+{
+    if (function_exists('mb_convert_encoding')) {
+        $converted = @mb_convert_encoding($value, 'UTF-8', $sourceEncoding);
+    } elseif (function_exists('iconv')) {
+        $converted = @iconv($sourceEncoding, 'UTF-8', $value);
+    } else {
+        throw new FeedPublisherException('parse', 'Converting this feed encoding requires mbstring or iconv.');
+    }
+    if ($converted === false) {
+        throw new FeedPublisherException('parse', 'The feed character encoding could not be converted to UTF-8.');
+    }
+    return $converted;
+}
+
+function feedpublisher_detect_feed_format(DOMElement $root)
+{
+    $name = strtolower($root->localName);
+    if ($name === 'feed' && $root->namespaceURI === 'http://www.w3.org/2005/Atom') {
+        return 'Atom';
+    }
+    if ($name === 'rdf' && $root->namespaceURI === 'http://www.w3.org/1999/02/22-rdf-syntax-ns#') {
+        return 'RSS 1.0 (RDF)';
+    }
+    if ($name === 'rss') {
+        $version = trim($root->getAttribute('version'));
+        return $version !== '' ? 'RSS ' . $version : 'RSS';
+    }
+    return '';
+}
+
+function feedpublisher_dom_first_text(DOMElement $parent, $localNames)
+{
+    foreach ($localNames as $name) {
+        foreach ($parent->childNodes as $child) {
+            if ($child->nodeType === XML_ELEMENT_NODE && strcasecmp($child->localName, $name) === 0) {
+                return trim($child->textContent);
+            }
+        }
+    }
+    return '';
+}
+
+function feedpublisher_dom_xml_base(DOMNode $node, $fallback)
+{
+    $bases = array();
+    for ($current = $node; $current instanceof DOMElement; $current = $current->parentNode) {
+        if ($current->hasAttributeNS('http://www.w3.org/XML/1998/namespace', 'base')) {
+            array_unshift($bases, $current->getAttributeNS('http://www.w3.org/XML/1998/namespace', 'base'));
+        }
+    }
+    $base = $fallback;
+    foreach ($bases as $candidate) {
+        $base = feedpublisher_resolve_relative_content_url($candidate, $base);
+    }
+    return $base;
+}
+
+function feedpublisher_resolve_relative_content_url($url, $base)
+{
+    $url = trim((string) $url);
+    if ($url === '') {
+        return '';
+    }
+    $parts = parse_url($url);
+    if ($parts === false) {
+        return '';
+    }
+    if (!empty($parts['scheme'])) {
+        return feedpublisher_safe_content_url($url) ? $url : '';
+    }
+    $baseParts = parse_url($base);
+    if (!$baseParts || empty($baseParts['scheme']) || empty($baseParts['host'])) {
+        return '';
+    }
+    if (strpos($url, '//') === 0) {
+        return $baseParts['scheme'] . ':' . $url;
+    }
+    $origin = $baseParts['scheme'] . '://' . $baseParts['host'];
+    if (isset($baseParts['port'])) {
+        $origin .= ':' . (int) $baseParts['port'];
+    }
+    if (!empty($parts['host'])) {
+        return '';
+    }
+    $relativePath = isset($parts['path']) ? $parts['path'] : '';
+    if ($relativePath === '') {
+        $path = isset($baseParts['path']) ? $baseParts['path'] : '/';
+    } else {
+        $path = isset($relativePath[0]) && $relativePath[0] === '/'
+            ? $relativePath
+            : rtrim(dirname(isset($baseParts['path']) ? $baseParts['path'] : '/'), '/') . '/' . $relativePath;
+    }
+    $segments = array();
+    foreach (explode('/', $path) as $segment) {
+        if ($segment === '' || $segment === '.') { continue; }
+        if ($segment === '..') { array_pop($segments); continue; }
+        $segments[] = $segment;
+    }
+    $resolved = $origin . '/' . implode('/', $segments);
+    if (array_key_exists('query', $parts)) {
+        $resolved .= '?' . $parts['query'];
+    } elseif ($relativePath === '' && isset($baseParts['query'])) {
+        $resolved .= '?' . $baseParts['query'];
+    }
+    if (array_key_exists('fragment', $parts)) {
+        $resolved .= '#' . $parts['fragment'];
+    }
+    return feedpublisher_safe_content_url($resolved) ? $resolved : '';
+}
+
+function feedpublisher_parse_source_date($value)
+{
+    $value = trim((string) $value);
+    if ($value === '') {
+        return 0;
+    }
+    try {
+        $date = new DateTimeImmutable($value, new DateTimeZone('UTC'));
+        return max(0, $date->getTimestamp());
+    } catch (Throwable $exception) {
+        return 0;
+    }
 }
 
 function feedpublisher_xml_within_limits(DOMNode $node, $depth, &$nodeCount)

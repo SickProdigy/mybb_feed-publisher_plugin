@@ -15,7 +15,9 @@ function feedpublisher_discover_feed($feed)
 
     $totals = array('staged' => 0, 'skipped' => 0, 'rejected' => 0, 'existing' => 0, 'full' => 0);
     try {
-        $items = feedpublisher_parse(feedpublisher_fetch($feed['url']));
+        $fetchMetadata = array();
+        $xml = feedpublisher_fetch($feed['url'], 2097152, $fetchMetadata);
+        $items = feedpublisher_parse($xml, $fetchMetadata);
         $initializing = empty($feed['initialized_at']);
         $plan = $initializing
             ? feedpublisher_initial_stage_plan($feed, $items)
