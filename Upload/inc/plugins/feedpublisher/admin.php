@@ -21,6 +21,7 @@ function feedpublisher_admin_controller()
     require_once MYBB_ADMIN_DIR . 'inc/class_form.php';
     require_once MYBB_ADMIN_DIR . 'inc/class_table.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/core.php';
+    require_once MYBB_ROOT . 'inc/plugins/feedpublisher/queue.php';
 
     $action = $mybb->get_input('action');
     if ($action === 'save') {
@@ -61,7 +62,7 @@ function feedpublisher_admin_list()
     feedpublisher_admin_tabs('feeds');
 
     $table = new Table;
-    foreach (array('Name', 'Destination forum', 'Posting user', 'Interval', 'Status', 'Last result', 'Controls') as $heading) {
+    foreach (array('Name', 'Destination forum', 'Posting user', 'Interval', 'Status', 'Queue', 'Last result', 'Controls') as $heading) {
         $table->construct_header($heading);
     }
 
@@ -83,6 +84,9 @@ function feedpublisher_admin_list()
         }
 
         $id = (int) $feed['id'];
+        $counts = feedpublisher_queue_counts($id);
+        $queueStatus = 'Queued: ' . $counts['queued'] . '<br>Processing: ' . $counts['processing']
+            . '<br>Published: ' . $counts['published'] . '<br>Failed: ' . $counts['failed'];
         $controls = '<a href="index.php?module=config/feedpublisher&amp;action=edit&amp;id=' . $id . '">Edit</a>'
             . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=delete&amp;id=' . $id . '">Delete</a>';
         $table->construct_cell('<strong>' . htmlspecialchars_uni($feed['name']) . '</strong><br><small>' . htmlspecialchars_uni($feed['url']) . '</small>');
@@ -90,13 +94,14 @@ function feedpublisher_admin_list()
         $table->construct_cell(htmlspecialchars_uni($feed['username'] ?: 'Missing user'));
         $table->construct_cell((int) $feed['interval_minutes'] . ' minutes');
         $table->construct_cell($feed['enabled'] ? 'Enabled' : 'Disabled');
+        $table->construct_cell($queueStatus . (!empty($feed['publishing_paused']) ? '<br><strong>Publishing paused</strong>' : ''));
         $table->construct_cell($lastResult);
         $table->construct_cell($controls);
         $table->construct_row();
     }
 
     if ($table->num_rows() === 0) {
-        $table->construct_cell('No feeds have been configured.', array('colspan' => 7));
+        $table->construct_cell('No feeds have been configured.', array('colspan' => 8));
         $table->construct_row();
     }
 
@@ -125,6 +130,10 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'uid' => 0,
         'enabled' => 0,
         'interval_minutes' => 60,
+        'publish_interval_minutes' => 60,
+        'max_posts_per_run' => 1,
+        'queue_order' => 'oldest',
+        'publishing_paused' => 0,
         'strip_selectors' => '',
     ), $values);
 
@@ -156,6 +165,10 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum.', $form->generate_select_box('fid', $forums, (int) $values['fid']));
     $container->output_row('Posting user <em>*</em>', 'The MyBB account used as the post author.', $form->generate_select_box('uid', $users, (int) $values['uid']));
     $container->output_row('Import interval <em>*</em>', 'Minutes between checks (minimum 5, maximum 10080).', $form->generate_numeric_field('interval_minutes', (int) $values['interval_minutes'], array('min' => 5, 'max' => 10080)));
+    $container->output_row('Publication interval <em>*</em>', 'Minimum minutes between publishing batches for this feed.', $form->generate_numeric_field('publish_interval_minutes', (int) $values['publish_interval_minutes'], array('min' => 5, 'max' => 10080)));
+    $container->output_row('Maximum posts per run <em>*</em>', 'Maximum queued entries released for this feed in one task run (1 to 25). Use 1 for gradual posting.', $form->generate_numeric_field('max_posts_per_run', (int) $values['max_posts_per_run'], array('min' => 1, 'max' => 25)));
+    $container->output_row('Queue order <em>*</em>', 'Choose which queued entry is published first.', $form->generate_select_box('queue_order', array('oldest' => 'Oldest first', 'newest' => 'Newest first'), $values['queue_order']));
+    $container->output_row('Publishing paused', 'Discovery continues while queued publication is paused.', $form->generate_check_box('publishing_paused', 1, 'Pause publishing for this feed', array('checked' => !empty($values['publishing_paused']))));
     $container->output_row('Cleanup selectors', 'Optional CSS selectors, one per line. Issue #5 will make these rules operational.', $form->generate_text_area('strip_selectors', $values['strip_selectors']));
     $container->output_row('Enabled', 'Only enabled feeds are inspected by the scheduled task.', $form->generate_check_box('enabled', 1, 'Enable this feed', array('checked' => !empty($values['enabled']))));
     $container->end();
@@ -177,6 +190,10 @@ function feedpublisher_admin_save()
         'fid' => $mybb->get_input('fid', MyBB::INPUT_INT),
         'uid' => $mybb->get_input('uid', MyBB::INPUT_INT),
         'interval_minutes' => $mybb->get_input('interval_minutes', MyBB::INPUT_INT),
+        'publish_interval_minutes' => $mybb->get_input('publish_interval_minutes', MyBB::INPUT_INT),
+        'max_posts_per_run' => $mybb->get_input('max_posts_per_run', MyBB::INPUT_INT),
+        'queue_order' => $mybb->get_input('queue_order'),
+        'publishing_paused' => $mybb->get_input('publishing_paused', MyBB::INPUT_INT) ? 1 : 0,
         'strip_selectors' => trim($mybb->get_input('strip_selectors')),
         'enabled' => $mybb->get_input('enabled', MyBB::INPUT_INT) ? 1 : 0,
     );
@@ -197,6 +214,15 @@ function feedpublisher_admin_save()
     if ($values['interval_minutes'] < 5 || $values['interval_minutes'] > 10080) {
         $errors[] = 'The import interval must be between 5 and 10080 minutes.';
     }
+    if ($values['publish_interval_minutes'] < 5 || $values['publish_interval_minutes'] > 10080) {
+        $errors[] = 'The publication interval must be between 5 and 10080 minutes.';
+    }
+    if ($values['max_posts_per_run'] < 1 || $values['max_posts_per_run'] > 25) {
+        $errors[] = 'Maximum posts per run must be between 1 and 25.';
+    }
+    if (!in_array($values['queue_order'], array('oldest', 'newest'), true)) {
+        $errors[] = 'Select a valid queue order.';
+    }
     if ($id && !$db->fetch_field($db->simple_select('feedpublisher_feeds', 'id', 'id=' . $id, array('limit' => 1)), 'id')) {
         $errors[] = 'The selected feed does not exist.';
     }
@@ -213,6 +239,10 @@ function feedpublisher_admin_save()
         'uid' => $values['uid'],
         'enabled' => $values['enabled'],
         'interval_minutes' => $values['interval_minutes'],
+        'publish_interval_minutes' => $values['publish_interval_minutes'],
+        'max_posts_per_run' => $values['max_posts_per_run'],
+        'queue_order' => $db->escape_string($values['queue_order']),
+        'publishing_paused' => $values['publishing_paused'],
         'strip_selectors' => $db->escape_string($values['strip_selectors']),
     );
     if ($id) {
@@ -242,6 +272,7 @@ function feedpublisher_admin_delete()
             flash_message('Confirm deletion before continuing.', 'error');
             admin_redirect('index.php?module=config/feedpublisher&action=delete&id=' . $id);
         }
+        $db->delete_query('feedpublisher_queue', 'feed_id=' . $id);
         $db->delete_query('feedpublisher_items', 'feed_id=' . $id);
         $db->delete_query('feedpublisher_feeds', 'id=' . $id);
         flash_message('The feed and its import history were deleted.', 'success');

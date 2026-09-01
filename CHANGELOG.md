@@ -12,3 +12,5 @@
   update, and delete workflows.
 - Add validated destination forum, posting user, enabled state, cleanup settings,
   status visibility, and per-feed import intervals.
+- Add a persistent discovery queue with per-feed pacing, batch limits, ordering,
+  pause controls, bounded retries, stale-claim recovery, and ACP queue counts.

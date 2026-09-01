@@ -15,7 +15,9 @@ Early development preview. The initial foundation includes:
 - deterministic HTML cleanup and HTML-to-MyCode conversion;
 - URL validation, response-size limits, timeouts, and duplicate detection;
 - Admin CP feed management with destination forum, posting user, enabled state,
-  cleanup configuration, status visibility, and per-feed intervals.
+  cleanup configuration, status visibility, and per-feed intervals;
+- persistent feed-entry staging with per-feed publication pacing, queue ordering,
+  pause controls, bounded retries, and queue status counts.
 
 ## Requirements
 
@@ -30,6 +32,11 @@ Early development preview. The initial foundation includes:
 3. Configure feeds under **Admin CP → Configuration → Feed Publisher**.
 4. Enable the installed **Feed Publisher imports** scheduled task. The task runs
    every 5 minutes and each feed is checked only when its own interval is due.
+
+Discovery stores entries in a persistent queue rather than publishing an entire
+feed at once. Queue release uses each feed publication interval, batch limit, and
+ordering preference. Actual MyBB thread creation remains disabled until the
+issue #3 publication pipeline is installed.
 
 ## Security model
 

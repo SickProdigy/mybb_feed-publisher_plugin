@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => '',
         'author' => 'SickProdigy',
         'authorsite' => '',
-        'version' => '0.1.1',
+        'version' => '0.1.2',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -33,7 +33,8 @@ function feedpublisher_is_installed()
     global $db;
 
     return $db->table_exists('feedpublisher_feeds')
-        && $db->table_exists('feedpublisher_items');
+        && $db->table_exists('feedpublisher_items')
+        && $db->table_exists('feedpublisher_queue');
 }
 
 function feedpublisher_install()
@@ -51,15 +52,18 @@ function feedpublisher_install()
             `uid` int unsigned NOT NULL,
             `enabled` tinyint(1) NOT NULL DEFAULT 0,
             `interval_minutes` smallint unsigned NOT NULL DEFAULT 60,
+            `publish_interval_minutes` smallint unsigned NOT NULL DEFAULT 60,
+            `max_posts_per_run` smallint unsigned NOT NULL DEFAULT 1,
+            `queue_order` varchar(10) NOT NULL DEFAULT 'oldest',
+            `publishing_paused` tinyint(1) NOT NULL DEFAULT 0,
             `strip_selectors` text NULL,
             `last_checked` int unsigned NOT NULL DEFAULT 0,
+            `last_published` int unsigned NOT NULL DEFAULT 0,
             `last_error` text NULL,
             PRIMARY KEY (`id`),
             KEY `enabled` (`enabled`)
         ) ENGINE=MyISAM{$collation}");
     }
-
-    feedpublisher_upgrade_schema();
 
     if (!$db->table_exists('feedpublisher_items')) {
         $db->write_query("CREATE TABLE `" . TABLE_PREFIX . "feedpublisher_items` (
@@ -75,6 +79,7 @@ function feedpublisher_install()
         ) ENGINE=MyISAM{$collation}");
     }
 
+    feedpublisher_upgrade_schema();
     feedpublisher_install_task();
 }
 
@@ -86,8 +91,47 @@ function feedpublisher_upgrade_schema()
         return;
     }
 
-    if (!$db->field_exists('interval_minutes', 'feedpublisher_feeds')) {
-        $db->add_column('feedpublisher_feeds', 'interval_minutes', "smallint unsigned NOT NULL DEFAULT 60 AFTER enabled");
+    $columns = array(
+        'interval_minutes' => "smallint unsigned NOT NULL DEFAULT 60 AFTER `enabled`",
+        'publish_interval_minutes' => "smallint unsigned NOT NULL DEFAULT 60 AFTER `interval_minutes`",
+        'max_posts_per_run' => "smallint unsigned NOT NULL DEFAULT 1 AFTER `publish_interval_minutes`",
+        'queue_order' => "varchar(10) NOT NULL DEFAULT 'oldest' AFTER `max_posts_per_run`",
+        'publishing_paused' => "tinyint(1) NOT NULL DEFAULT 0 AFTER `queue_order`",
+        'last_published' => "int unsigned NOT NULL DEFAULT 0 AFTER `last_checked`",
+    );
+    foreach ($columns as $name => $definition) {
+        if (!$db->field_exists($name, 'feedpublisher_feeds')) {
+            $db->add_column('feedpublisher_feeds', $name, $definition);
+        }
+    }
+
+    if (!$db->table_exists('feedpublisher_queue')) {
+        $collation = $db->build_create_table_collation();
+        $db->write_query("CREATE TABLE `" . TABLE_PREFIX . "feedpublisher_queue` (
+            `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+            `feed_id` int unsigned NOT NULL,
+            `item_key` char(64) NOT NULL,
+            `title` varchar(255) NOT NULL DEFAULT '',
+            `source_url` varchar(2048) NOT NULL DEFAULT '',
+            `raw_content` mediumtext NOT NULL,
+            `content` mediumtext NOT NULL,
+            `source_published` int unsigned NOT NULL DEFAULT 0,
+            `discovered_at` int unsigned NOT NULL,
+            `available_at` int unsigned NOT NULL DEFAULT 0,
+            `state` varchar(16) NOT NULL DEFAULT 'queued',
+            `attempts` smallint unsigned NOT NULL DEFAULT 0,
+            `last_attempt` int unsigned NOT NULL DEFAULT 0,
+            `last_error` text NULL,
+            `claim_token` char(64) NOT NULL DEFAULT '',
+            `claimed_at` int unsigned NOT NULL DEFAULT 0,
+            `tid` int unsigned NOT NULL DEFAULT 0,
+            `pid` int unsigned NOT NULL DEFAULT 0,
+            `published_at` int unsigned NOT NULL DEFAULT 0,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `feed_item` (`feed_id`, `item_key`),
+            KEY `feed_state` (`feed_id`, `state`),
+            KEY `state_available` (`state`, `available_at`)
+        ) ENGINE=MyISAM{$collation}");
     }
 }
 
@@ -95,6 +139,7 @@ function feedpublisher_uninstall()
 {
     global $db;
 
+    $db->drop_table('feedpublisher_queue');
     $db->drop_table('feedpublisher_items');
     $db->drop_table('feedpublisher_feeds');
     $db->delete_query('tasks', "file='feedpublisher'");
@@ -120,7 +165,7 @@ function feedpublisher_install_task()
 
     $db->insert_query('tasks', array(
         'title' => 'Feed Publisher imports',
-        'description' => 'Fetches enabled RSS and Atom feeds and publishes new entries.',
+        'description' => 'Discovers feed entries and publishes queued items at controlled intervals.',
         'file' => 'feedpublisher',
         'minute' => '0,5,10,15,20,25,30,35,40,45,50,55',
         'hour' => '*',
