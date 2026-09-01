@@ -394,12 +394,26 @@ function feedpublisher_admin_initial_preview($values)
     $page->output_header('Feed Publisher initial import preview');
     feedpublisher_admin_tabs('feeds');
 
+    echo '<style>'
+        . '.fp-preview{margin:0 0 10px;border:1px solid #bbb;background:#fff}'
+        . '.fp-preview summary{cursor:pointer;padding:12px;font-weight:bold}'
+        . '.fp-preview-publish{border-left:5px solid #3b8f45;background:#f4fbf5}'
+        . '.fp-preview-skip{border-left:5px solid #b94a48;background:#fff6f6}'
+        . '.fp-preview[open]{border-width:2px;box-shadow:0 2px 8px rgba(0,0,0,.18)}'
+        . '.fp-preview-publish[open]{border-color:#3b8f45}'
+        . '.fp-preview-skip[open]{border-color:#b94a48}'
+        . '.fp-preview-actions{margin:16px 0;padding:12px;border:1px solid #ccc;background:#f5f5f5}'
+        . '.fp-preview-actions .button{display:inline-block;margin:0 8px 0 0;padding:7px 12px;text-decoration:none}'
+        . '</style>';
     echo '<div style="margin:12px 0"><strong>Initial policy:</strong> ' . htmlspecialchars_uni($values['initial_policy'])
         . ' &middot; <strong>Maximum posts per run:</strong> ' . (int) $values['max_posts_per_run']
         . ' &middot; <strong>Previewed entries:</strong> ' . min(100, count($plan)) . '</div>';
     foreach (array_slice($plan, 0, 100) as $index => $entry) {
         $item = $entry['item'];
-        $action = $entry['state'] === 'queued' ? 'Queue for paced publishing' : 'Mark as seen; do not publish';
+        $willPublish = $entry['state'] === 'queued';
+        $action = $willPublish ? 'Queue for paced publishing' : 'Mark as seen; do not publish';
+        $statusIcon = $willPublish ? '&#x1F7E2;' : '&#x1F534;';
+        $panelClass = $willPublish ? 'fp-preview-publish' : 'fp-preview-skip';
         $itemKey = feedpublisher_item_key($item['key']);
         $condition = 'feed_id=' . (int) $values['id'] . " AND item_key='" . $db->escape_string($itemKey) . "'";
         $imported = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_items', 'tid,pid,imported_at', $condition, array('limit' => 1))) : null;
@@ -413,8 +427,8 @@ function feedpublisher_admin_initial_preview($values)
         } else {
             $importState = 'New';
         }
-        echo '<details' . ($index === 0 ? ' open' : '') . ' style="margin:0 0 10px;border:1px solid #ccc;background:#fff">'
-            . '<summary style="cursor:pointer;padding:12px;font-weight:bold">' . htmlspecialchars_uni($action)
+        echo '<details class="fp-preview ' . $panelClass . '"' . ($index === 0 ? ' open' : '') . '>'
+            . '<summary><span aria-hidden="true">' . $statusIcon . '</span> ' . htmlspecialchars_uni($action)
             . ' &mdash; ' . htmlspecialchars_uni($item['title']) . '</summary>'
             . '<div style="padding:0 12px 14px">'
             . '<table style="width:100%;border-collapse:collapse;margin-bottom:14px">'
@@ -453,12 +467,15 @@ function feedpublisher_admin_initial_preview($values)
         echo '<p>Showing the first 100 of ' . count($plan) . ' entries.</p>';
     }
     $listUrl = 'index.php?module=config/feedpublisher';
+    $addUrl = $listUrl . '&amp;action=add';
+    echo '<div class="fp-preview-actions">';
     if (!empty($values['preview_initial'])) {
-        echo '<p><a class="button" href="' . $listUrl . '" onclick="history.back(); return false;">Return to form</a> ';
+        echo '<a class="button" href="' . $listUrl . '" onclick="history.back(); return false;">&larr; Return to feed form</a>';
     } else {
-        echo '<p><a class="button" href="' . $listUrl . '&amp;action=edit&amp;id=' . (int) $values['id'] . '">Edit feed</a> ';
+        echo '<a class="button" href="' . $listUrl . '&amp;action=edit&amp;id=' . (int) $values['id'] . '">Edit this feed</a>';
     }
-    echo '<a class="button" href="' . $listUrl . '">Back to feed list</a></p>';
+    echo '<a class="button" href="' . $addUrl . '">+ Add feed</a>'
+        . '<a class="button" href="' . $listUrl . '">View all feeds</a></div>';
     $page->output_footer();
 }
 

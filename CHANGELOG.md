@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.12 - 2026-09-01
+
+- Add green and red status indicators and panel styling for entries that will
+  be queued or marked as seen.
+- Give the currently expanded preview panel a stronger border and shadow.
+- Replace ambiguous footer navigation with return/edit, Add feed, and View all
+  feeds actions.
+
 ## 0.1.11 - 2026-09-01
 
 - Present dry-run entries as collapsible review panels with the first entry open.
