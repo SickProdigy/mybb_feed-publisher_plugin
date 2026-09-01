@@ -40,12 +40,15 @@ function feedpublisher_publish_queued_item($feed, $item)
         throw new RuntimeException('The configured posting user cannot create threads in the destination forum.');
     }
 
-    $subject = trim((string) $item['title']);
+    $subject = feedpublisher_build_subject($item['title'], isset($feed['title_prefix']) ? $feed['title_prefix'] : '');
     $message = trim((string) $item['content']);
     if ($subject === '' || $message === '') {
         throw new RuntimeException('The queued entry must have a non-empty title and body.');
     }
-    $subject = my_substr($subject, 0, 85);
+    $threadPrefixId = isset($feed['thread_prefix_id']) ? (int) $feed['thread_prefix_id'] : 0;
+    if ($threadPrefixId && !feedpublisher_thread_prefix_is_available($threadPrefixId, $forum['fid'], $user)) {
+        throw new RuntimeException('The selected MyBB thread prefix is no longer available to the posting user in the destination forum.');
+    }
     $message = feedpublisher_add_source_attribution($message, $item, isset($feed['attribution_mode']) ? $feed['attribution_mode'] : 'link');
 
     require_once MYBB_ROOT . 'inc/datahandlers/post.php';
@@ -60,7 +63,7 @@ function feedpublisher_publish_queued_item($feed, $item)
         $handler->set_data(array(
             'fid' => (int) $forum['fid'],
             'subject' => $subject,
-            'prefix' => 0,
+            'prefix' => $threadPrefixId,
             'icon' => 0,
             'uid' => (int) $user['uid'],
             'username' => $user['username'],
@@ -87,6 +90,59 @@ function feedpublisher_publish_queued_item($feed, $item)
         throw new RuntimeException('MyBB did not return thread and post IDs after publication.');
     }
     return $result;
+}
+
+function feedpublisher_normalize_title_prefix($prefix)
+{
+    return trim(preg_replace('/\s+/u', ' ', (string) $prefix));
+}
+
+function feedpublisher_build_subject($title, $prefix = '')
+{
+    $title = trim(preg_replace('/\s+/u', ' ', (string) $title));
+    $prefix = feedpublisher_normalize_title_prefix($prefix);
+    if ($prefix === '') {
+        return my_substr($title, 0, 85);
+    }
+    $remaining = 85 - my_strlen($prefix) - 1;
+    return $remaining > 0 ? $prefix . ' ' . my_substr($title, 0, $remaining) : my_substr($prefix, 0, 85);
+}
+
+function feedpublisher_available_thread_prefixes($fid, $user)
+{
+    $available = array();
+    $prefixes = build_prefixes(0);
+    if (!$fid || !$user || empty($user['uid']) || !is_array($prefixes)) {
+        return $available;
+    }
+    foreach ($prefixes as $prefix) {
+        if ($prefix['forums'] !== '-1' && !in_array((int) $fid, array_map('intval', explode(',', $prefix['forums'])), true)) {
+            continue;
+        }
+        if (!is_member($prefix['groups'], $user)) {
+            continue;
+        }
+        $available[(int) $prefix['pid']] = $prefix;
+    }
+    return $available;
+}
+
+function feedpublisher_thread_prefix_is_available($prefixId, $fid, $user)
+{
+    if (!(int) $prefixId) {
+        return true;
+    }
+    $available = feedpublisher_available_thread_prefixes((int) $fid, $user);
+    return isset($available[(int) $prefixId]);
+}
+
+function feedpublisher_thread_prefix_label($prefix)
+{
+    if (!$prefix) {
+        return 'No MyBB prefix';
+    }
+    $label = isset($prefix['prefix']) ? trim(strip_tags((string) $prefix['prefix'])) : '';
+    return $label !== '' ? $label : 'Prefix #' . (int) $prefix['pid'];
 }
 
 function feedpublisher_add_source_attribution($message, $item, $mode)

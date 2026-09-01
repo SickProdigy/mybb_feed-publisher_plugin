@@ -143,6 +143,8 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'url' => '',
         'fid' => 0,
         'uid' => 0,
+        'title_prefix' => '',
+        'thread_prefix_id' => 0,
         'enabled' => 0,
         'interval_minutes' => 60,
         'publish_interval_minutes' => 60,
@@ -179,13 +181,27 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         $users[(int) $user['uid']] = $user['username'];
     }
 
+    $prefixOptions = array(0 => 'No MyBB prefix');
+    $postingUser = !empty($values['uid']) ? get_user((int) $values['uid']) : array();
+    foreach (feedpublisher_available_thread_prefixes((int) $values['fid'], $postingUser) as $prefixId => $prefix) {
+        $prefixOptions[$prefixId] = feedpublisher_thread_prefix_label($prefix);
+    }
+    $selectedPrefixId = (int) $values['thread_prefix_id'];
+    if ($selectedPrefixId && !isset($prefixOptions[$selectedPrefixId])) {
+        $prefixOptions[$selectedPrefixId] = 'Unavailable prefix #' . $selectedPrefixId . ' - select another option';
+    }
+
     $form = new Form('index.php?module=config/feedpublisher&amp;action=save', 'post');
     echo $form->generate_hidden_field('id', (int) $values['id']);
     $container = new FormContainer($action === 'edit' ? 'Edit feed' : 'Add feed');
     $container->output_row('Name <em>*</em>', 'A descriptive name shown in the Admin CP and task logs.', $form->generate_text_box('name', $values['name']));
     $container->output_row('Feed URL <em>*</em>', 'The public HTTP or HTTPS RSS/Atom URL.', $form->generate_text_box('url', $values['url']));
-    $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum.', $form->generate_select_box('fid', $forums, (int) $values['fid']));
-    $container->output_row('Posting user <em>*</em>', 'The MyBB account used as the post author.', $form->generate_select_box('uid', $users, (int) $values['uid']));
+    $refresh = "this.form.elements['refresh_prefixes'].click();";
+    $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum. Changing it refreshes the available MyBB prefixes.', $form->generate_select_box('fid', $forums, (int) $values['fid'], array('onchange' => $refresh)));
+    $container->output_row('Posting user <em>*</em>', 'The MyBB account used as the post author. Changing it refreshes the prefixes this user may apply.', $form->generate_select_box('uid', $users, (int) $values['uid'], array('onchange' => $refresh)));
+    $container->output_row('Title prefix text', 'Optional text added to the beginning of every generated title, such as [RSS] or Freebie:.', $form->generate_text_box('title_prefix', $values['title_prefix'], array('maxlength' => 40)));
+    $container->output_row('MyBB thread prefix', 'Optional built-in styled prefix available to the selected posting user in the destination forum.', $form->generate_select_box('thread_prefix_id', $prefixOptions, $selectedPrefixId)
+        . ' <input type="submit" class="button" name="refresh_prefixes" value="Refresh prefix choices" style="display:none">');
     $container->output_row('Source attribution <em>*</em>', 'Append a source link to every imported thread. Keeping attribution enabled is recommended.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
     $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent queues one; recent count queues a bounded number; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only', 'recent' => 'Recent count', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
     $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
@@ -196,11 +212,11 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->output_row('Publication interval <em>*</em>', 'Minimum minutes between publishing batches for this feed.', $form->generate_numeric_field('publish_interval_minutes', (int) $values['publish_interval_minutes'], array('min' => 5, 'max' => 10080)));
     $container->output_row('Maximum posts per run <em>*</em>', 'Maximum queued entries released for this feed in one task run (1 to 25). Use 1 for gradual posting.', $form->generate_numeric_field('max_posts_per_run', (int) $values['max_posts_per_run'], array('min' => 1, 'max' => 25)));
     $container->output_row('Queue order <em>*</em>', 'Choose which queued entry is published first.', $form->generate_select_box('queue_order', array('oldest' => 'Oldest first', 'newest' => 'Newest first'), $values['queue_order']));
-    $container->output_row('Publishing paused', 'Discovery continues while queued publication is paused.', $form->generate_check_box('publishing_paused', 1, 'Pause publishing for this feed', array('checked' => !empty($values['publishing_paused']))));
     $container->output_row('Common cleanup', 'Remove recognized author/byline blocks and trailing source/read-more backlink blocks before conversion.', $form->generate_check_box('remove_bylines', 1, 'Remove common author and byline blocks', array('checked' => !empty($values['remove_bylines']))) . '<br>' . $form->generate_check_box('remove_source_links', 1, 'Remove common source and read-more backlink blocks', array('checked' => !empty($values['remove_source_links']))));
     $container->output_row('Cleanup selectors', 'Optional simple CSS selectors, one per line: tag, .class, #id, tag.class, [attribute], or tag[attribute].', $form->generate_text_area('strip_selectors', $values['strip_selectors']));
     $container->output_row('Cleanup regular expressions', 'Optional PHP-compatible regular expressions, one per line. Matching text is removed; rules are validated before saving.', $form->generate_text_area('strip_regexes', $values['strip_regexes']));
-    $container->output_row('Enabled', 'Only enabled feeds are inspected by the scheduled task.', $form->generate_check_box('enabled', 1, 'Enable this feed', array('checked' => !empty($values['enabled']))));
+    $container->output_row('Pause publishing', 'Keep checking this feed and adding new entries to its queue, but do not create MyBB threads until publishing is resumed.', $form->generate_check_box('publishing_paused', 1, 'Keep collecting entries, but do not publish them yet', array('checked' => !empty($values['publishing_paused']))));
+    $container->output_row('Feed enabled', 'Turn this off to stop this feed completely. Feed Publisher will not check it for new entries or publish its queued entries.', $form->generate_check_box('enabled', 1, 'Enable checking and publishing for this feed', array('checked' => !empty($values['enabled']))));
     $container->end();
     $form->output_submit_wrapper(array(
         $form->generate_submit_button($action === 'edit' ? 'Save feed' : 'Add feed', array('name' => 'save_feed')),
@@ -226,6 +242,8 @@ function feedpublisher_admin_save()
         'url' => trim($mybb->get_input('url')),
         'fid' => $mybb->get_input('fid', MyBB::INPUT_INT),
         'uid' => $mybb->get_input('uid', MyBB::INPUT_INT),
+        'title_prefix' => $mybb->get_input('title_prefix'),
+        'thread_prefix_id' => $mybb->get_input('thread_prefix_id', MyBB::INPUT_INT),
         'interval_minutes' => $mybb->get_input('interval_minutes', MyBB::INPUT_INT),
         'publish_interval_minutes' => $mybb->get_input('publish_interval_minutes', MyBB::INPUT_INT),
         'max_posts_per_run' => $mybb->get_input('max_posts_per_run', MyBB::INPUT_INT),
@@ -236,6 +254,7 @@ function feedpublisher_admin_save()
         'attribution_mode' => $mybb->get_input('attribution_mode'),
         'reset_initial_policy' => $mybb->get_input('reset_initial_policy', MyBB::INPUT_INT) ? 1 : 0,
         'preview_initial' => isset($mybb->input['preview_initial']) ? 1 : 0,
+        'refresh_prefixes' => isset($mybb->input['refresh_prefixes']) ? 1 : 0,
         'strip_selectors' => trim($mybb->get_input('strip_selectors')),
         'strip_regexes' => trim($mybb->get_input('strip_regexes')),
         'remove_bylines' => $mybb->get_input('remove_bylines', MyBB::INPUT_INT) ? 1 : 0,
@@ -243,6 +262,11 @@ function feedpublisher_admin_save()
         'enabled' => $mybb->get_input('enabled', MyBB::INPUT_INT) ? 1 : 0,
     );
     $errors = array();
+
+    if ($values['refresh_prefixes']) {
+        feedpublisher_admin_form($id ? 'edit' : 'add', $values);
+        return;
+    }
 
     if ($values['name'] === '' || my_strlen($values['name']) > 150) {
         $errors[] = 'Enter a feed name no longer than 150 characters.';
@@ -255,6 +279,14 @@ function feedpublisher_admin_save()
     }
     if (!$db->fetch_field($db->simple_select('users', 'uid', 'uid=' . $values['uid'], array('limit' => 1)), 'uid')) {
         $errors[] = 'Select a valid posting user.';
+    }
+    if (preg_match('/[\x00-\x1F\x7F]/', $values['title_prefix']) || my_strlen(feedpublisher_normalize_title_prefix($values['title_prefix'])) > 40) {
+        $errors[] = 'Title prefix text must be one line and no longer than 40 characters.';
+    }
+    $values['title_prefix'] = feedpublisher_normalize_title_prefix($values['title_prefix']);
+    $postingUser = get_user($values['uid']);
+    if ($values['thread_prefix_id'] && !feedpublisher_thread_prefix_is_available($values['thread_prefix_id'], $values['fid'], $postingUser)) {
+        $errors[] = 'Select a MyBB thread prefix available to the posting user in the destination forum.';
     }
     if ($values['interval_minutes'] < 5 || $values['interval_minutes'] > 10080) {
         $errors[] = 'The import interval must be between 5 and 10080 minutes.';
@@ -313,6 +345,8 @@ function feedpublisher_admin_save()
         'url' => $db->escape_string($values['url']),
         'fid' => $values['fid'],
         'uid' => $values['uid'],
+        'title_prefix' => $db->escape_string($values['title_prefix']),
+        'thread_prefix_id' => $values['thread_prefix_id'],
         'enabled' => $values['enabled'],
         'interval_minutes' => $values['interval_minutes'],
         'publish_interval_minutes' => $values['publish_interval_minutes'],
@@ -447,16 +481,25 @@ function feedpublisher_admin_initial_preview($values)
             $removed = max(0, $prepared['raw_bytes'] - $prepared['cleaned_bytes']);
             $percent = $prepared['raw_bytes'] > 0 ? round(($removed / $prepared['raw_bytes']) * 100, 1) : 0;
             $previewItem = array('source_url' => $item['url'], 'title' => $item['title']);
-            $exampleTitle = my_substr(trim($item['title']), 0, 85);
+            $exampleTitle = feedpublisher_build_subject($item['title'], isset($values['title_prefix']) ? $values['title_prefix'] : '');
+            $previewUser = !empty($values['uid']) ? get_user((int) $values['uid']) : array();
+            $availablePreviewPrefixes = feedpublisher_available_thread_prefixes((int) $values['fid'], $previewUser);
+            $selectedPrefix = !empty($values['thread_prefix_id']) && isset($availablePreviewPrefixes[(int) $values['thread_prefix_id']])
+                ? $availablePreviewPrefixes[(int) $values['thread_prefix_id']]
+                : false;
+            $nativePrefixLabel = $selectedPrefix ? feedpublisher_thread_prefix_label($selectedPrefix) : 'No MyBB prefix';
+            $displayedExampleTitle = $selectedPrefix ? $nativePrefixLabel . ' ' . $exampleTitle : $exampleTitle;
             $exampleBody = feedpublisher_add_source_attribution($prepared['content'], $previewItem, $values['attribution_mode']);
             echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">HTML cleanup</th><td style="padding:6px;border-bottom:1px solid #ddd">Source: '
                 . $prepared['raw_bytes'] . ' bytes &middot; Cleaned: ' . $prepared['cleaned_bytes']
                 . ' bytes &middot; Removed: ' . $removed . ' bytes (' . $percent . '%)</td></tr>';
+            echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">MyBB thread prefix</th><td style="padding:6px;border-bottom:1px solid #ddd">'
+                . htmlspecialchars_uni($nativePrefixLabel) . '</td></tr>';
             if ($importState !== 'New') {
                 echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Existing state</th><td style="padding:6px;border-bottom:1px solid #ddd">' . $importState . '</td></tr>';
             }
             echo '</table><h3 style="margin-bottom:5px">Example title</h3>'
-                . '<div style="padding:10px;border:1px solid #ccc;background:#f7f7f7">' . htmlspecialchars_uni($exampleTitle) . '</div>'
+                . '<div style="padding:10px;border:1px solid #ccc;background:#f7f7f7">' . htmlspecialchars_uni($displayedExampleTitle) . '</div>'
                 . '<h3 style="margin-bottom:5px">Example body</h3>'
                 . '<pre style="white-space:pre-wrap;max-height:28em;overflow:auto;padding:10px;border:1px solid #ccc;background:#f7f7f7">'
                 . htmlspecialchars_uni($exampleBody) . '</pre>';

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.14 - 2026-09-01
+
+- Add independent per-feed custom title text and native MyBB thread-prefix
+  selection, with forum/user filtering and publication-time revalidation.
+- Preview the exact bounded subject and selected native prefix in dry runs.
+- Clarify and correctly order Pause publishing and Feed enabled at the bottom
+  of the feed settings form.
+
 ## 0.1.13 - 2026-09-01
 
 - Add a per-feed ACP Operations page for immediate discovery, forced next-batch

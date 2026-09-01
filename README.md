@@ -21,7 +21,8 @@ Early development preview. The initial foundation includes:
 - per-feed initial import policies for all available entries, most recent only,
   a bounded recent count, or starting after the current backlog;
 - permission-aware MyBB thread creation through the official post data handler,
-  with configurable source attribution.
+  with configurable source attribution, custom title text, and optional native
+  MyBB thread prefixes.
 
 ## Requirements
 
@@ -51,6 +52,11 @@ per line. The initial-selection preview displays the resulting cleaned MyCode.
 Saved feeds also have a direct **Preview** action. Both preview paths are dry
 runs: they use the production fetch, parse, cleanup, and conversion pipeline,
 show existing import/queue state, and do not write plugin or forum data.
+
+Each feed may prepend arbitrary safe text such as `[RSS]` to generated subjects
+and may independently select a built-in MyBB thread prefix available to its
+destination forum and posting user. Prefix eligibility is checked again at
+publication time, and dry run shows the exact subject plus the native prefix.
 
 Each feed is limited to 1,000 active queued, processing, or failed entries.
 Published queue rows are retained for 90 days; the permanent imported-item
