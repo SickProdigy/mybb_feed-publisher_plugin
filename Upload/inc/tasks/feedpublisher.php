@@ -19,6 +19,11 @@ function task_feedpublisher($task)
     $errors = array();
     $query = $db->simple_select('feedpublisher_feeds', '*', 'enabled=1');
     while ($feed = $db->fetch_array($query)) {
+        $interval = max(5, (int) $feed['interval_minutes']) * 60;
+        if ((int) $feed['last_checked'] > TIME_NOW - $interval) {
+            continue;
+        }
+
         try {
             $items = feedpublisher_parse(feedpublisher_fetch($feed['url']));
             foreach ($items as $item) {

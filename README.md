@@ -13,10 +13,9 @@ Early development preview. The initial foundation includes:
 - a MyBB scheduled task entry point;
 - RSS 2.0 and Atom parsing;
 - deterministic HTML cleanup and HTML-to-MyCode conversion;
-- URL validation, response-size limits, timeouts, and duplicate detection.
-
-An Admin CP interface for managing feeds is the next milestone. Until it is
-available, feed rows must not be added manually on a production forum.
+- URL validation, response-size limits, timeouts, and duplicate detection;
+- Admin CP feed management with destination forum, posting user, enabled state,
+  cleanup configuration, status visibility, and per-feed intervals.
 
 ## Requirements
 
@@ -28,8 +27,9 @@ available, feed rows must not be added manually on a production forum.
 
 1. Upload the contents of `Upload` to the root of the MyBB installation.
 2. Activate **Feed Publisher** under **Admin CP → Configuration → Plugins**.
-3. Enable the installed **Feed Publisher imports** scheduled task after feeds
-   can be configured through the upcoming Admin CP interface.
+3. Configure feeds under **Admin CP → Configuration → Feed Publisher**.
+4. Enable the installed **Feed Publisher imports** scheduled task. The task runs
+   every 5 minutes and each feed is checked only when its own interval is due.
 
 ## Security model
 

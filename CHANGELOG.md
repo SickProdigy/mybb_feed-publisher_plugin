@@ -8,3 +8,7 @@
 - Add RSS/Atom fetch and parse foundation.
 - Add safe HTML-to-MyCode conversion and import deduplication.
 - Add scheduled task entry point.
+- Add permission-protected Admin CP feed management with CSRF-safe create,
+  update, and delete workflows.
+- Add validated destination forum, posting user, enabled state, cleanup settings,
+  status visibility, and per-feed import intervals.
