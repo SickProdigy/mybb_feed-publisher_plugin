@@ -142,7 +142,10 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'initial_limit' => 1,
         'initialized_at' => 0,
         'attribution_mode' => 'link',
+        'remove_bylines' => 0,
+        'remove_source_links' => 0,
         'strip_selectors' => '',
+        'strip_regexes' => '',
     ), $values);
 
     $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
@@ -183,7 +186,9 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->output_row('Maximum posts per run <em>*</em>', 'Maximum queued entries released for this feed in one task run (1 to 25). Use 1 for gradual posting.', $form->generate_numeric_field('max_posts_per_run', (int) $values['max_posts_per_run'], array('min' => 1, 'max' => 25)));
     $container->output_row('Queue order <em>*</em>', 'Choose which queued entry is published first.', $form->generate_select_box('queue_order', array('oldest' => 'Oldest first', 'newest' => 'Newest first'), $values['queue_order']));
     $container->output_row('Publishing paused', 'Discovery continues while queued publication is paused.', $form->generate_check_box('publishing_paused', 1, 'Pause publishing for this feed', array('checked' => !empty($values['publishing_paused']))));
-    $container->output_row('Cleanup selectors', 'Optional CSS selectors, one per line. Issue #5 will make these rules operational.', $form->generate_text_area('strip_selectors', $values['strip_selectors']));
+    $container->output_row('Common cleanup', 'Remove recognized author/byline blocks and trailing source/read-more backlink blocks before conversion.', $form->generate_check_box('remove_bylines', 1, 'Remove common author and byline blocks', array('checked' => !empty($values['remove_bylines']))) . '<br>' . $form->generate_check_box('remove_source_links', 1, 'Remove common source and read-more backlink blocks', array('checked' => !empty($values['remove_source_links']))));
+    $container->output_row('Cleanup selectors', 'Optional simple CSS selectors, one per line: tag, .class, #id, tag.class, [attribute], or tag[attribute].', $form->generate_text_area('strip_selectors', $values['strip_selectors']));
+    $container->output_row('Cleanup regular expressions', 'Optional PHP-compatible regular expressions, one per line. Matching text is removed; rules are validated before saving.', $form->generate_text_area('strip_regexes', $values['strip_regexes']));
     $container->output_row('Enabled', 'Only enabled feeds are inspected by the scheduled task.', $form->generate_check_box('enabled', 1, 'Enable this feed', array('checked' => !empty($values['enabled']))));
     $container->end();
     $form->output_submit_wrapper(array(
@@ -221,6 +226,9 @@ function feedpublisher_admin_save()
         'reset_initial_policy' => $mybb->get_input('reset_initial_policy', MyBB::INPUT_INT) ? 1 : 0,
         'preview_initial' => isset($mybb->input['preview_initial']) ? 1 : 0,
         'strip_selectors' => trim($mybb->get_input('strip_selectors')),
+        'strip_regexes' => trim($mybb->get_input('strip_regexes')),
+        'remove_bylines' => $mybb->get_input('remove_bylines', MyBB::INPUT_INT) ? 1 : 0,
+        'remove_source_links' => $mybb->get_input('remove_source_links', MyBB::INPUT_INT) ? 1 : 0,
         'enabled' => $mybb->get_input('enabled', MyBB::INPUT_INT) ? 1 : 0,
     );
     $errors = array();
@@ -257,6 +265,9 @@ function feedpublisher_admin_save()
     }
     if (!in_array($values['attribution_mode'], array('link', 'title_link', 'none'), true)) {
         $errors[] = 'Select a valid source attribution mode.';
+    }
+    foreach (feedpublisher_cleanup_validate_rules($values['strip_selectors'], $values['strip_regexes']) as $cleanupError) {
+        $errors[] = $cleanupError;
     }
     if ($values['preview_initial'] && !$errors) {
         feedpublisher_admin_initial_preview($values);
@@ -303,6 +314,9 @@ function feedpublisher_admin_save()
         'initialized_at' => ($policyChanged && $values['reset_initial_policy']) ? 0 : (int) ($currentFeed['initialized_at'] ?? 0),
         'last_checked' => ($policyChanged && $values['reset_initial_policy']) ? 0 : (int) ($currentFeed['last_checked'] ?? 0),
         'strip_selectors' => $db->escape_string($values['strip_selectors']),
+        'strip_regexes' => $db->escape_string($values['strip_regexes']),
+        'remove_bylines' => $values['remove_bylines'],
+        'remove_source_links' => $values['remove_source_links'],
     );
     if ($id) {
         $db->update_query('feedpublisher_feeds', $record, 'id=' . $id);
@@ -380,15 +394,18 @@ function feedpublisher_admin_initial_preview($values)
     $table->construct_header('Entry');
     $table->construct_header('Published');
     $table->construct_header('Initial action');
+    $table->construct_header('Cleaned result');
     foreach (array_slice($plan, 0, 100) as $entry) {
         $item = $entry['item'];
         $table->construct_cell('<strong>' . htmlspecialchars_uni($item['title']) . '</strong><br><small>' . htmlspecialchars_uni($item['url']) . '</small>');
         $table->construct_cell($item['published'] ? my_date('relative', (int) $item['published']) : 'Unknown');
         $table->construct_cell($entry['state'] === 'queued' ? 'Queue for paced publishing' : 'Mark as seen; do not publish');
+        $cleaned = feedpublisher_html_to_mycode(feedpublisher_cleanup_html($item['content'], $values, $item['url']));
+        $table->construct_cell('<pre style="white-space:pre-wrap;max-height:14em;overflow:auto">' . htmlspecialchars_uni(my_substr($cleaned, 0, 2000)) . '</pre>');
         $table->construct_row();
     }
     if (!$plan) {
-        $table->construct_cell('The feed contains no eligible entries.', array('colspan' => 3));
+        $table->construct_cell('The feed contains no eligible entries.', array('colspan' => 4));
         $table->construct_row();
     }
     $table->output('Preview: ' . htmlspecialchars_uni($values['initial_policy']));

@@ -43,6 +43,12 @@ ordering preference. Due queue entries are published as threads by the configure
 MyBB user after the destination forum and effective posting permissions are
 validated at runtime.
 
+Cleanup runs on source HTML before safe MyCode conversion. Each feed can remove
+common byline/source blocks, up to 50 simple element selectors, and up to 20
+validated removal-only regular expressions. Supported selectors are `tag`,
+`.class`, `#id`, `tag.class`, `[attribute]`, and `tag[attribute]`, one
+per line. The initial-selection preview displays the resulting cleaned MyCode.
+
 Each feed is limited to 1,000 active queued, processing, or failed entries.
 Published queue rows are retained for 90 days; the permanent imported-item
 record remains for deduplication. If a task is interrupted after reserving an

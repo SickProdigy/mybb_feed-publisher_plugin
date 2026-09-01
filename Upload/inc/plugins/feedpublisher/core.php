@@ -151,6 +151,137 @@ function feedpublisher_item_key($identity)
     return hash('sha256', feedpublisher_normalize_item_identity($identity));
 }
 
+function feedpublisher_cleanup_rule_lines($rules)
+{
+    return array_values(array_filter(array_map('trim', preg_split('/\R/u', (string) $rules)), 'strlen'));
+}
+
+function feedpublisher_cleanup_selector_xpath($selector)
+{
+    if (!preg_match('/^(?:(?<tag>[a-z][a-z0-9-]*))?(?:(?<class>\.[a-z_][a-z0-9_-]*)|(?<id>#[a-z_][a-z0-9_-]*)|\[(?<attr>[a-z_:][a-z0-9_:-]*)\])?$/i', $selector, $match)
+        || (empty($match['tag']) && empty($match['class']) && empty($match['id']) && empty($match['attr']))) {
+        return false;
+    }
+
+    $xpath = '//' . (!empty($match['tag']) ? strtolower($match['tag']) : '*');
+    if (!empty($match['class'])) {
+        $class = substr($match['class'], 1);
+        $xpath .= "[contains(concat(' ', normalize-space(@class), ' '), ' " . $class . " ')]";
+    } elseif (!empty($match['id'])) {
+        $xpath .= "[@id='" . substr($match['id'], 1) . "']";
+    } elseif (!empty($match['attr'])) {
+        $xpath .= '[@' . $match['attr'] . ']';
+    }
+    return $xpath;
+}
+
+function feedpublisher_cleanup_validate_rules($selectors, $regexes)
+{
+    $errors = array();
+    $selectorLines = feedpublisher_cleanup_rule_lines($selectors);
+    $regexLines = feedpublisher_cleanup_rule_lines($regexes);
+    if (count($selectorLines) > 50) {
+        $errors[] = 'Cleanup selectors are limited to 50 rules.';
+    }
+    if (count($regexLines) > 20) {
+        $errors[] = 'Cleanup regular expressions are limited to 20 rules.';
+    }
+    foreach ($selectorLines as $selector) {
+        if (strlen($selector) > 100 || feedpublisher_cleanup_selector_xpath($selector) === false) {
+            $errors[] = 'Invalid cleanup selector: ' . $selector;
+        }
+    }
+    foreach ($regexLines as $regex) {
+        if (strlen($regex) > 500 || @preg_match($regex, '') === false) {
+            $errors[] = 'Invalid cleanup regular expression: ' . $regex;
+        }
+    }
+    return $errors;
+}
+
+function feedpublisher_cleanup_remove_nodes(DOMXPath $xpath, $query)
+{
+    $nodes = $xpath->query($query);
+    if (!$nodes) {
+        return;
+    }
+    for ($index = $nodes->length - 1; $index >= 0; --$index) {
+        $node = $nodes->item($index);
+        if ($node instanceof DOMElement && $node->getAttribute('id') === 'feedpublisher-root') {
+            continue;
+        }
+        if ($node && $node->parentNode) {
+            $node->parentNode->removeChild($node);
+        }
+    }
+}
+
+function feedpublisher_cleanup_html($html, $feed, $sourceUrl = '')
+{
+    $document = new DOMDocument('1.0', 'UTF-8');
+    $previous = libxml_use_internal_errors(true);
+    $document->loadHTML('<?xml encoding="UTF-8"><div id="feedpublisher-root">' . $html . '</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD | LIBXML_NONET);
+    libxml_clear_errors();
+    libxml_use_internal_errors($previous);
+    $xpath = new DOMXPath($document);
+
+    $selectors = array_slice(feedpublisher_cleanup_rule_lines(isset($feed['strip_selectors']) ? $feed['strip_selectors'] : ''), 0, 50);
+    if (!empty($feed['remove_bylines'])) {
+        $selectors = array_merge($selectors, array('.author', '.byline', '.post-author'));
+    }
+    if (!empty($feed['remove_source_links'])) {
+        $selectors = array_merge($selectors, array('.source', '.read-more', '.readmore'));
+    }
+    foreach (array_unique($selectors) as $selector) {
+        $query = feedpublisher_cleanup_selector_xpath($selector);
+        if ($query !== false) {
+            feedpublisher_cleanup_remove_nodes($xpath, $query);
+        }
+    }
+
+    if (!empty($feed['remove_bylines'])) {
+        feedpublisher_cleanup_remove_nodes($xpath, "//*[@rel='author']");
+    }
+    if (!empty($feed['remove_source_links']) && $sourceUrl !== '') {
+        $links = $xpath->query('//a[@href]');
+        if ($links) {
+            for ($index = $links->length - 1; $index >= 0; --$index) {
+                $link = $links->item($index);
+                if (trim($link->getAttribute('href')) !== trim($sourceUrl)) {
+                    continue;
+                }
+                $remove = $link;
+                if ($link->parentNode instanceof DOMElement
+                    && in_array(strtolower($link->parentNode->nodeName), array('p', 'div'), true)
+                    && mb_strlen(trim($link->parentNode->textContent)) <= 250) {
+                    $remove = $link->parentNode;
+                }
+                if ($remove->parentNode) {
+                    $remove->parentNode->removeChild($remove);
+                }
+            }
+        }
+    }
+
+    $roots = $xpath->query("//*[@id='feedpublisher-root']");
+    $root = $roots && $roots->length ? $roots->item(0) : null;
+    $cleaned = '';
+    if ($root) {
+        foreach ($root->childNodes as $child) {
+            $cleaned .= $document->saveHTML($child);
+        }
+    }
+    foreach (array_slice(feedpublisher_cleanup_rule_lines(isset($feed['strip_regexes']) ? $feed['strip_regexes'] : ''), 0, 20) as $regex) {
+        if (@preg_match($regex, '') !== false) {
+            $result = @preg_replace($regex, '', $cleaned);
+            if (is_string($result)) {
+                $cleaned = $result;
+            }
+        }
+    }
+    return $cleaned;
+}
+
 function feedpublisher_html_to_mycode($html)
 {
     $html = preg_replace('#<(script|style|iframe|object|embed|form)[^>]*>.*?</\\1>#is', '', $html);

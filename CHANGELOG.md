@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.6 - 2026-09-01
+
+- Apply per-feed element selectors and removal-only regular expressions before
+  HTML-to-MyCode conversion.
+- Add optional common cleanup for author/byline and source/read-more blocks.
+- Validate every selector and regular expression in ACP so malformed rules
+  cannot interrupt scheduled imports.
+- Show the cleaned MyCode result in the non-writing initial-selection preview.
+
 ## 0.1.5 - 2026-09-01
 
 - Normalize GUID and canonical-link identities before deriving stable item keys.
