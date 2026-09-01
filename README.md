@@ -58,6 +58,12 @@ record remains for deduplication. If a task is interrupted after reserving an
 item, the entry is marked **uncertain** instead of being automatically published
 again. Review the destination forum before manually resolving such an entry.
 
+The **Operations** action beside each saved feed can run discovery immediately,
+publish the next bounded batch, retry failures, pause or resume publishing,
+reset fetch backoff, clear eligible queue rows, and resolve uncertain outcomes.
+State-changing maintenance and recovery actions require confirmation and are
+recorded in MyBB's administrator log.
+
 ## Security model
 
 Feed content is converted to MyCode rather than posted as trusted HTML. Feed

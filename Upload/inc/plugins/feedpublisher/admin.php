@@ -23,10 +23,15 @@ function feedpublisher_admin_controller()
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/core.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/queue.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/publisher.php';
+    require_once MYBB_ROOT . 'inc/plugins/feedpublisher/operations.php';
 
     $action = $mybb->get_input('action');
     if ($action === 'save') {
         feedpublisher_admin_save();
+    } elseif ($action === 'operation') {
+        feedpublisher_admin_operation_commit();
+    } elseif ($action === 'operations') {
+        feedpublisher_admin_operations_page();
     } elseif ($action === 'preview') {
         feedpublisher_admin_preview_saved();
     } elseif ($action === 'delete') {
@@ -90,12 +95,14 @@ function feedpublisher_admin_list()
         $counts = feedpublisher_queue_counts($id);
         $queueStatus = 'Queued: ' . $counts['queued'] . '<br>Processing: ' . $counts['processing']
             . '<br>Published: ' . $counts['published'] . '<br>Skipped: ' . $counts['skipped']
-            . '<br>Failed: ' . $counts['failed'] . '<br>Uncertain: ' . $counts['uncertain'];
+            . '<br>Failed: ' . $counts['failed'] . '<br>Uncertain: ' . $counts['uncertain']
+            . '<br>Rejected: ' . $counts['rejected'];
         $initialStatus = empty($feed['initialized_at'])
             ? 'Initial scan pending (' . htmlspecialchars_uni($feed['initial_policy']) . ')'
             : 'Initial scan: ' . my_date('relative', (int) $feed['initialized_at']) . ' (' . htmlspecialchars_uni($feed['initial_policy']) . ')';
         $controls = '<a href="index.php?module=config/feedpublisher&amp;action=edit&amp;id=' . $id . '">Edit</a>'
             . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=preview&amp;id=' . $id . '">Preview</a>'
+            . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=operations&amp;id=' . $id . '">Operations</a>'
             . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=delete&amp;id=' . $id . '">Delete</a>';
         $table->construct_cell('<strong>' . htmlspecialchars_uni($feed['name']) . '</strong><br><small>' . htmlspecialchars_uni($feed['url']) . '</small>');
         $table->construct_cell(htmlspecialchars_uni($feed['forum_name'] ?: 'Missing forum'));
@@ -420,10 +427,10 @@ function feedpublisher_admin_initial_preview($values)
         $queued = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_queue', 'state,tid,pid', $condition, array('limit' => 1))) : null;
         if ($imported && !empty($imported['tid'])) {
             $importState = 'Imported (thread ' . (int) $imported['tid'] . ', post ' . (int) $imported['pid'] . ')';
-        } elseif ($imported) {
-            $importState = 'Reserved / uncertain';
         } elseif ($queued) {
             $importState = 'Queue: ' . htmlspecialchars_uni($queued['state']);
+        } elseif ($imported) {
+            $importState = 'Reserved / uncertain';
         } else {
             $importState = 'New';
         }
@@ -490,4 +497,209 @@ function feedpublisher_admin_preview_saved()
         admin_redirect('index.php?module=config/feedpublisher');
     }
     feedpublisher_admin_initial_preview($feed);
+}
+
+function feedpublisher_admin_operation_form($feedId, $operation, $label, $confirmation = '')
+{
+    global $mybb;
+
+    echo '<form action="index.php?module=config/feedpublisher&amp;action=operation" method="post" style="margin:0">'
+        . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '">'
+        . '<input type="hidden" name="id" value="' . (int) $feedId . '">'
+        . '<input type="hidden" name="operation" value="' . htmlspecialchars_uni($operation) . '">';
+    if ($confirmation !== '') {
+        echo '<label><input type="checkbox" name="confirm" value="1"> ' . htmlspecialchars_uni($confirmation) . '</label><br>';
+    }
+    echo '<input type="submit" class="button" value="' . htmlspecialchars_uni($label) . '"></form>';
+}
+
+function feedpublisher_admin_operations_page()
+{
+    global $db, $mybb, $page;
+
+    $id = $mybb->get_input('id', MyBB::INPUT_INT);
+    $feed = $db->fetch_array($db->simple_select('feedpublisher_feeds', '*', 'id=' . $id, array('limit' => 1)));
+    if (!$feed) {
+        flash_message('The selected feed does not exist.', 'error');
+        admin_redirect('index.php?module=config/feedpublisher');
+    }
+
+    $counts = feedpublisher_queue_counts($id);
+    $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
+    $page->add_breadcrumb_item('Operations');
+    $page->output_header('Feed Publisher operations');
+    feedpublisher_admin_tabs('feeds');
+    echo '<p><strong>' . htmlspecialchars_uni($feed['name']) . '</strong><br><small>'
+        . htmlspecialchars_uni($feed['url']) . '</small></p>';
+
+    $table = new Table;
+    $table->construct_header('Operation');
+    $table->construct_header('Current state');
+    $table->construct_header('Action');
+    $table->construct_cell('<strong>Discover now</strong><br><small>Fetch this feed immediately and stage eligible entries.</small>');
+    $table->construct_cell('Last checked: ' . ((int) $feed['last_checked'] ? my_date('relative', (int) $feed['last_checked']) : 'Never')
+        . '<br>Fetch failures: ' . (int) $feed['fetch_failures']);
+    ob_start();
+    feedpublisher_admin_operation_form($id, 'discover', 'Discover now');
+    $table->construct_cell(ob_get_clean());
+    $table->construct_row();
+
+    $table->construct_cell('<strong>Publish next batch</strong><br><small>Bypass the interval, but retain the feed pause and maximum-post limit.</small>');
+    $table->construct_cell('Queued: ' . $counts['queued'] . '<br>Publishing: ' . (!empty($feed['publishing_paused']) ? 'Paused' : 'Active'));
+    ob_start();
+    feedpublisher_admin_operation_form($id, 'publish', 'Publish next batch');
+    $table->construct_cell(ob_get_clean());
+    $table->construct_row();
+
+    $table->construct_cell('<strong>Retry failed</strong><br><small>Return at most 100 failed items to the queue.</small>');
+    $table->construct_cell('Failed: ' . $counts['failed']);
+    ob_start();
+    feedpublisher_admin_operation_form($id, 'retry_failed', 'Retry failed items');
+    $table->construct_cell(ob_get_clean());
+    $table->construct_row();
+
+    $table->construct_cell('<strong>Pause or resume</strong>');
+    $table->construct_cell(!empty($feed['publishing_paused']) ? 'Paused' : 'Active');
+    ob_start();
+    feedpublisher_admin_operation_form($id, 'toggle_pause', !empty($feed['publishing_paused']) ? 'Resume publishing' : 'Pause publishing', 'Confirm the publishing-state change.');
+    $table->construct_cell(ob_get_clean());
+    $table->construct_row();
+
+    $table->construct_cell('<strong>Reset fetch backoff</strong>');
+    $table->construct_cell((int) $feed['next_fetch_at'] > TIME_NOW ? 'Next retry: ' . my_date('relative', (int) $feed['next_fetch_at']) : 'No active backoff');
+    ob_start();
+    feedpublisher_admin_operation_form($id, 'reset_backoff', 'Reset backoff', 'Confirm resetting the saved failure count and retry time.');
+    $table->construct_cell(ob_get_clean());
+    $table->construct_row();
+
+    $table->construct_cell('<strong>Clear eligible queue</strong><br><small>Delete queued and failed rows only. Published, skipped, processing, uncertain, and rejected rows remain.</small>');
+    $table->construct_cell('Eligible: ' . ($counts['queued'] + $counts['failed']));
+    ob_start();
+    feedpublisher_admin_operation_form($id, 'clear_queue', 'Clear eligible queue', 'Confirm permanent deletion of queued and failed entries.');
+    $table->construct_cell(ob_get_clean());
+    $table->construct_row();
+    $table->output('Manual controls');
+
+    $queueTable = new Table;
+    $queueTable->construct_header('State');
+    $queueTable->construct_header('Entry');
+    $queueTable->construct_header('Attempts / error');
+    $queueTable->construct_header('Resolution');
+    $query = $db->simple_select(
+        'feedpublisher_queue',
+        '*',
+        'feed_id=' . $id . " AND state IN ('failed','uncertain')",
+        array('order_by' => 'last_attempt', 'order_dir' => 'DESC', 'limit' => 100)
+    );
+    while ($item = $db->fetch_array($query)) {
+        $queueTable->construct_cell(htmlspecialchars_uni($item['state']));
+        $queueTable->construct_cell('<strong>' . htmlspecialchars_uni($item['title']) . '</strong><br><small>' . htmlspecialchars_uni($item['source_url']) . '</small>');
+        $queueTable->construct_cell((int) $item['attempts'] . '<br><small>' . htmlspecialchars_uni($item['last_error']) . '</small>');
+        ob_start();
+        if ($item['state'] === 'failed') {
+            echo '<form action="index.php?module=config/feedpublisher&amp;action=operation" method="post">'
+                . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '">'
+                . '<input type="hidden" name="id" value="' . $id . '"><input type="hidden" name="queue_id" value="' . (int) $item['id'] . '">'
+                . '<input type="hidden" name="operation" value="retry_item"><input type="submit" class="button" value="Retry this item"></form>';
+        } else {
+            echo '<form action="index.php?module=config/feedpublisher&amp;action=operation" method="post">'
+                . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '">'
+                . '<input type="hidden" name="id" value="' . $id . '"><input type="hidden" name="queue_id" value="' . (int) $item['id'] . '">'
+                . '<input type="hidden" name="operation" value="resolve_uncertain">'
+                . '<select name="resolution"><option value="link">Link existing post</option><option value="retry">No post exists; retry</option><option value="reject">Permanently reject</option></select><br>'
+                . 'Thread ID: <input type="number" name="tid" min="0" style="width:80px"> '
+                . 'Post ID: <input type="number" name="pid" min="0" style="width:80px"><br>'
+                . '<label><input type="checkbox" name="confirm" value="1"> Confirm this resolution; before retrying, verify that no thread or post was created.</label><br>'
+                . '<input type="submit" class="button" value="Resolve uncertain item"></form>';
+        }
+        $queueTable->construct_cell(ob_get_clean());
+        $queueTable->construct_row();
+    }
+    if ($queueTable->num_rows() === 0) {
+        $queueTable->construct_cell('No failed or uncertain entries require action.', array('colspan' => 4));
+        $queueTable->construct_row();
+    }
+    $queueTable->output('Items requiring attention');
+    echo '<p><a class="button" href="index.php?module=config/feedpublisher">View all feeds</a></p>';
+    $page->output_footer();
+}
+
+function feedpublisher_admin_operation_commit()
+{
+    global $db, $mybb;
+
+    if ($mybb->request_method !== 'post') {
+        admin_redirect('index.php?module=config/feedpublisher');
+    }
+    verify_post_check($mybb->get_input('my_post_key'));
+    $id = $mybb->get_input('id', MyBB::INPUT_INT);
+    $operation = $mybb->get_input('operation');
+    $feed = $db->fetch_array($db->simple_select('feedpublisher_feeds', '*', 'id=' . $id, array('limit' => 1)));
+    if (!$feed) {
+        flash_message('The selected feed does not exist.', 'error');
+        admin_redirect('index.php?module=config/feedpublisher');
+    }
+
+    $confirmedOperations = array('toggle_pause', 'reset_backoff', 'clear_queue', 'resolve_uncertain');
+    if (in_array($operation, $confirmedOperations, true) && !$mybb->get_input('confirm', MyBB::INPUT_INT)) {
+        flash_message('Confirm the requested state-changing operation before continuing.', 'error');
+        admin_redirect('index.php?module=config/feedpublisher&action=operations&id=' . $id);
+    }
+
+    try {
+        if ($operation === 'discover') {
+            $result = feedpublisher_discover_feed($feed);
+            $message = 'Discovery completed: staged ' . $result['staged'] . ', skipped ' . $result['skipped']
+                . ', already known ' . $result['existing'] . ', queue-full ' . $result['full'] . '.';
+        } elseif ($operation === 'publish') {
+            if (!empty($feed['publishing_paused'])) {
+                throw new RuntimeException('Resume this feed before manually publishing a batch.');
+            }
+            $result = feedpublisher_queue_dispatch($feed, 'feedpublisher_publish_queued_item', true);
+            $message = 'Manual batch completed: published ' . $result['published'] . ', failed ' . $result['failed'] . '.';
+        } elseif ($operation === 'retry_failed') {
+            $count = feedpublisher_queue_retry_failed($id, 100);
+            $message = 'Returned ' . $count . ' failed entries to the queue.';
+        } elseif ($operation === 'retry_item') {
+            $queueId = $mybb->get_input('queue_id', MyBB::INPUT_INT);
+            $db->update_query('feedpublisher_queue', array(
+                'state' => 'queued', 'attempts' => 0, 'available_at' => TIME_NOW, 'last_error' => '',
+            ), 'id=' . $queueId . ' AND feed_id=' . $id . " AND state='failed'");
+            if ($db->affected_rows() !== 1) {
+                throw new RuntimeException('The failed queue entry no longer exists.');
+            }
+            $message = 'The failed entry was returned to the queue.';
+        } elseif ($operation === 'toggle_pause') {
+            $paused = empty($feed['publishing_paused']) ? 1 : 0;
+            $db->update_query('feedpublisher_feeds', array('publishing_paused' => $paused), 'id=' . $id);
+            $message = $paused ? 'Publishing was paused.' : 'Publishing was resumed.';
+        } elseif ($operation === 'reset_backoff') {
+            $db->update_query('feedpublisher_feeds', array(
+                'fetch_failures' => 0, 'next_fetch_at' => 0, 'last_error' => '',
+            ), 'id=' . $id);
+            $message = 'Fetch backoff and the saved fetch error were reset.';
+        } elseif ($operation === 'clear_queue') {
+            $db->delete_query('feedpublisher_queue', 'feed_id=' . $id . " AND state IN ('queued','failed')");
+            $message = 'Deleted ' . $db->affected_rows() . ' queued or failed entries.';
+        } elseif ($operation === 'resolve_uncertain') {
+            $queueId = $mybb->get_input('queue_id', MyBB::INPUT_INT);
+            $resolution = $mybb->get_input('resolution');
+            $result = feedpublisher_queue_resolve_uncertain(
+                $feed,
+                $queueId,
+                $resolution,
+                $mybb->get_input('tid', MyBB::INPUT_INT),
+                $mybb->get_input('pid', MyBB::INPUT_INT)
+            );
+            $message = 'The uncertain entry was resolved as ' . $result . '.';
+        } else {
+            throw new RuntimeException('Select a valid Feed Publisher operation.');
+        }
+        log_admin_action('Feed Publisher', $operation, $id, $mybb->get_input('queue_id', MyBB::INPUT_INT));
+        flash_message($message, 'success');
+    } catch (Throwable $exception) {
+        log_admin_action('Feed Publisher failed operation', $operation, $id, $mybb->get_input('queue_id', MyBB::INPUT_INT));
+        flash_message(htmlspecialchars_uni(feedpublisher_safe_log_text($exception->getMessage())), 'error');
+    }
+    admin_redirect('index.php?module=config/feedpublisher&action=operations&id=' . $id);
 }

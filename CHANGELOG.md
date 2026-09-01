@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.1.13 - 2026-09-01
+
+- Add a per-feed ACP Operations page for immediate discovery, forced next-batch
+  publication, bounded failed-item retries, and confirmed pause/backoff/queue
+  maintenance.
+- Add individual failed-item retry and uncertain-item resolution by linking an
+  existing MyBB post, certifying safe retry, or permanently rejecting the item.
+- Share discovery logic between scheduled and manual runs, retain queue claim
+  and reservation safeguards, and record successful and failed operations in
+  the MyBB administrator log.
+- Display rejected queue counts separately.
+
 ## 0.1.12 - 2026-09-01
 
 - Add green and red status indicators and panel styling for entries that will

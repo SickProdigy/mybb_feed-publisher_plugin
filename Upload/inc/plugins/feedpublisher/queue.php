@@ -69,7 +69,7 @@ function feedpublisher_queue_counts($feedId)
 {
     global $db;
 
-    $counts = array('queued' => 0, 'processing' => 0, 'published' => 0, 'failed' => 0, 'skipped' => 0, 'uncertain' => 0);
+    $counts = array('queued' => 0, 'processing' => 0, 'published' => 0, 'failed' => 0, 'skipped' => 0, 'uncertain' => 0, 'rejected' => 0);
     $query = $db->simple_select(
         'feedpublisher_queue',
         'state, COUNT(id) AS total',
@@ -96,7 +96,7 @@ function feedpublisher_queue_release_stale_claims($feedId, $timeout = 900)
     ), "feed_id=" . (int) $feedId . " AND state='processing' AND claimed_at<{$cutoff}");
 }
 
-function feedpublisher_queue_claim_due($feed)
+function feedpublisher_queue_claim_due($feed, $force = false)
 {
     global $db;
 
@@ -105,7 +105,7 @@ function feedpublisher_queue_claim_due($feed)
     }
 
     $publishInterval = max(5, (int) $feed['publish_interval_minutes']) * 60;
-    if ((int) $feed['last_published'] > TIME_NOW - $publishInterval) {
+    if (!$force && (int) $feed['last_published'] > TIME_NOW - $publishInterval) {
         return array();
     }
 
@@ -224,10 +224,10 @@ function feedpublisher_queue_fail($item, $message, $retryDelay = 300)
     ), "id=" . (int) $item['id'] . " AND claim_token='" . $db->escape_string($item['claim_token']) . "'");
 }
 
-function feedpublisher_queue_dispatch($feed, $publisher)
+function feedpublisher_queue_dispatch($feed, $publisher, $force = false)
 {
     $result = array('published' => 0, 'failed' => 0);
-    foreach (feedpublisher_queue_claim_due($feed) as $item) {
+    foreach (feedpublisher_queue_claim_due($feed, $force) as $item) {
         if (!feedpublisher_queue_reserve($feed, $item)) {
             feedpublisher_queue_mark_uncertain($item);
             ++$result['failed'];

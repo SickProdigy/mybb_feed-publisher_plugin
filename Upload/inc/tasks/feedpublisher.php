@@ -15,6 +15,7 @@ function task_feedpublisher($task)
 
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/core.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/queue.php';
+    require_once MYBB_ROOT . 'inc/plugins/feedpublisher/operations.php';
     $publisherFile = MYBB_ROOT . 'inc/plugins/feedpublisher/publisher.php';
     if (is_file($publisherFile)) {
         require_once $publisherFile;
@@ -33,49 +34,16 @@ function task_feedpublisher($task)
 
         if ($discoveryDue) {
             try {
-                $items = feedpublisher_parse(feedpublisher_fetch($feed['url']));
-                $initializing = empty($feed['initialized_at']);
-                $plan = $initializing
-                    ? feedpublisher_initial_stage_plan($feed, $items)
-                    : array_map(function ($item) {
-                        return array('item' => $item, 'state' => 'queued');
-                    }, $items);
-                $initialComplete = true;
-                foreach ($plan as $entry) {
-                    $result = feedpublisher_queue_stage($feed, $entry['item'], $entry['state']);
-                    if ($result === 'queued') {
-                        ++$totals['staged'];
-                    } elseif (isset($totals[$result])) {
-                        ++$totals[$result];
-                    }
-                    if ($result === 'full') {
-                        $initialComplete = false;
+                $discovery = feedpublisher_discover_feed($feed);
+                foreach ($discovery as $name => $total) {
+                    if (isset($totals[$name])) {
+                        $totals[$name] += $total;
                     }
                 }
-                $feedUpdate = array(
-                    'last_checked' => TIME_NOW,
-                    'fetch_failures' => 0,
-                    'next_fetch_at' => 0,
-                    'last_error' => '',
-                );
-                if ($initializing && $initialComplete) {
-                    $feedUpdate['initialized_at'] = TIME_NOW;
-                    $feed['initialized_at'] = TIME_NOW;
-                }
-                $db->update_query('feedpublisher_feeds', $feedUpdate, 'id=' . (int) $feed['id']);
             } catch (Throwable $exception) {
-                $failures = min(10, (int) $feed['fetch_failures'] + 1);
-                $retryDelay = min(21600, 300 * (2 ** min(6, $failures - 1)));
                 $stage = $exception instanceof FeedPublisherException ? $exception->getStage() : 'discovery';
                 $message = feedpublisher_safe_log_text($exception->getMessage());
-                $db->update_query('feedpublisher_feeds', array(
-                    'last_checked' => TIME_NOW,
-                    'fetch_failures' => $failures,
-                    'next_fetch_at' => TIME_NOW + $retryDelay,
-                    'last_error' => $db->escape_string($message),
-                ), 'id=' . (int) $feed['id']);
-                $errors[] = feedpublisher_safe_log_text($feed['name']) . ' ' . $stage . ': ' . $message
-                    . ' (retry in ' . (int) ceil($retryDelay / 60) . ' minutes)';
+                $errors[] = feedpublisher_safe_log_text($feed['name']) . ' ' . $stage . ': ' . $message;
             }
         }
 
