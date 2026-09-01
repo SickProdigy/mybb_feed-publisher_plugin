@@ -13,7 +13,7 @@ function feedpublisher_admin_controller()
 {
     global $mybb, $page;
 
-    if (empty($mybb->admin['permissions']['config']['feedpublisher'])) {
+    if (!check_admin_permissions(array('module' => 'config', 'action' => 'feedpublisher'), false)) {
         $page->output_error('You do not have permission to manage Feed Publisher feeds.');
     }
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.9 - 2026-09-01
+
+- Use MyBB's administrator permission API so configured super administrators
+  can manage Feed Publisher while custom ACP permissions remain enforceable for
+  other administrators.
+
 ## 0.1.8 - 2026-09-01
 
 - Resolve and validate every feed address, then pin cURL to a validated public
