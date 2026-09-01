@@ -48,6 +48,9 @@ common byline/source blocks, up to 50 simple element selectors, and up to 20
 validated removal-only regular expressions. Supported selectors are `tag`,
 `.class`, `#id`, `tag.class`, `[attribute]`, and `tag[attribute]`, one
 per line. The initial-selection preview displays the resulting cleaned MyCode.
+Saved feeds also have a direct **Preview** action. Both preview paths are dry
+runs: they use the production fetch, parse, cleanup, and conversion pipeline,
+show existing import/queue state, and do not write plugin or forum data.
 
 Each feed is limited to 1,000 active queued, processing, or failed entries.
 Published queue rows are retained for 90 days; the permanent imported-item

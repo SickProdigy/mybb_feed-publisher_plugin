@@ -45,6 +45,7 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
     if ($state === 'queued' && $queued >= 1000) {
         return 'full';
     }
+    $prepared = $state === 'skipped' ? null : feedpublisher_prepare_item($feed, $item);
 
     $record = array(
         'feed_id' => $feedId,
@@ -52,9 +53,7 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
         'title' => $db->escape_string(my_substr($item['title'], 0, 255)),
         'source_url' => $db->escape_string(substr($item['url'], 0, 2048)),
         'raw_content' => $state === 'skipped' ? '' : $db->escape_string($item['content']),
-        'content' => $state === 'skipped' ? '' : $db->escape_string(feedpublisher_html_to_mycode(
-            feedpublisher_cleanup_html($item['content'], $feed, $item['url'])
-        )),
+        'content' => $state === 'skipped' ? '' : $db->escape_string($prepared['content']),
         'source_published' => max(0, (int) $item['published']),
         'discovered_at' => TIME_NOW,
         'available_at' => TIME_NOW,

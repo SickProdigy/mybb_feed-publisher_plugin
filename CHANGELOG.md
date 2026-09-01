@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.7 - 2026-09-01
+
+- Add a direct dry-run preview for every saved feed and retain the form preview
+  for unsaved configuration changes.
+- Use one shared preparation pipeline for scheduled queueing and previews.
+- Show parsed entry details, cleaned MyCode, cleanup byte counts, intended
+  initial action, and imported or queued state without writing any data.
+
 ## 0.1.6 - 2026-09-01
 
 - Apply per-feed element selectors and removal-only regular expressions before

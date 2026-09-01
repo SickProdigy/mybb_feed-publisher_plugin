@@ -26,6 +26,8 @@ function feedpublisher_admin_controller()
     $action = $mybb->get_input('action');
     if ($action === 'save') {
         feedpublisher_admin_save();
+    } elseif ($action === 'preview') {
+        feedpublisher_admin_preview_saved();
     } elseif ($action === 'delete') {
         feedpublisher_admin_delete();
     } elseif ($action === 'add' || $action === 'edit') {
@@ -92,6 +94,7 @@ function feedpublisher_admin_list()
             ? 'Initial scan pending (' . htmlspecialchars_uni($feed['initial_policy']) . ')'
             : 'Initial scan: ' . my_date('relative', (int) $feed['initialized_at']) . ' (' . htmlspecialchars_uni($feed['initial_policy']) . ')';
         $controls = '<a href="index.php?module=config/feedpublisher&amp;action=edit&amp;id=' . $id . '">Edit</a>'
+            . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=preview&amp;id=' . $id . '">Preview</a>'
             . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=delete&amp;id=' . $id . '">Delete</a>';
         $table->construct_cell('<strong>' . htmlspecialchars_uni($feed['name']) . '</strong><br><small>' . htmlspecialchars_uni($feed['url']) . '</small>');
         $table->construct_cell(htmlspecialchars_uni($feed['forum_name'] ?: 'Missing forum'));
@@ -193,7 +196,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->end();
     $form->output_submit_wrapper(array(
         $form->generate_submit_button($action === 'edit' ? 'Save feed' : 'Add feed', array('name' => 'save_feed')),
-        $form->generate_submit_button('Preview initial selection', array('name' => 'preview_initial'))
+        $form->generate_submit_button('Preview / dry run', array('name' => 'preview_initial'))
     ));
     $form->end();
     $page->output_footer();
@@ -373,7 +376,7 @@ function feedpublisher_admin_url_is_valid($url)
 
 function feedpublisher_admin_initial_preview($values)
 {
-    global $page;
+    global $db, $page;
 
     try {
         $items = feedpublisher_parse(feedpublisher_fetch($values['url']));
@@ -394,24 +397,60 @@ function feedpublisher_admin_initial_preview($values)
     $table->construct_header('Entry');
     $table->construct_header('Published');
     $table->construct_header('Initial action');
+    $table->construct_header('Import state');
+    $table->construct_header('Cleanup');
     $table->construct_header('Cleaned result');
     foreach (array_slice($plan, 0, 100) as $entry) {
         $item = $entry['item'];
         $table->construct_cell('<strong>' . htmlspecialchars_uni($item['title']) . '</strong><br><small>' . htmlspecialchars_uni($item['url']) . '</small>');
         $table->construct_cell($item['published'] ? my_date('relative', (int) $item['published']) : 'Unknown');
         $table->construct_cell($entry['state'] === 'queued' ? 'Queue for paced publishing' : 'Mark as seen; do not publish');
-        $cleaned = feedpublisher_html_to_mycode(feedpublisher_cleanup_html($item['content'], $values, $item['url']));
-        $table->construct_cell('<pre style="white-space:pre-wrap;max-height:14em;overflow:auto">' . htmlspecialchars_uni(my_substr($cleaned, 0, 2000)) . '</pre>');
+        $itemKey = feedpublisher_item_key($item['key']);
+        $condition = 'feed_id=' . (int) $values['id'] . " AND item_key='" . $db->escape_string($itemKey) . "'";
+        $imported = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_items', 'tid,pid,imported_at', $condition, array('limit' => 1))) : null;
+        $queued = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_queue', 'state,tid,pid', $condition, array('limit' => 1))) : null;
+        if ($imported && !empty($imported['tid'])) {
+            $importState = 'Imported (thread ' . (int) $imported['tid'] . ', post ' . (int) $imported['pid'] . ')';
+        } elseif ($imported) {
+            $importState = 'Reserved / uncertain';
+        } elseif ($queued) {
+            $importState = 'Queue: ' . htmlspecialchars_uni($queued['state']);
+        } else {
+            $importState = 'New';
+        }
+        $table->construct_cell($importState);
+        try {
+            $prepared = feedpublisher_prepare_item($values, $item);
+            $removed = max(0, $prepared['raw_bytes'] - $prepared['cleaned_bytes']);
+            $table->construct_cell('Source HTML: ' . $prepared['raw_bytes'] . ' bytes<br>Cleaned HTML: ' . $prepared['cleaned_bytes'] . ' bytes<br>Removed: ' . $removed . ' bytes');
+            $table->construct_cell('<pre style="white-space:pre-wrap;max-height:14em;overflow:auto">' . htmlspecialchars_uni(my_substr($prepared['content'], 0, 2000)) . '</pre>');
+        } catch (Throwable $exception) {
+            $table->construct_cell('Conversion failed');
+            $table->construct_cell('<span style="color:#a00">' . htmlspecialchars_uni($exception->getMessage()) . '</span>');
+        }
         $table->construct_row();
     }
     if (!$plan) {
-        $table->construct_cell('The feed contains no eligible entries.', array('colspan' => 4));
+        $table->construct_cell('The feed contains no eligible entries.', array('colspan' => 6));
         $table->construct_row();
     }
     $table->output('Preview: ' . htmlspecialchars_uni($values['initial_policy']));
-    echo '<p>This preview did not change the queue or feed configuration. Use your browser Back button to return to the completed form.</p>';
+    echo '<p><strong>Dry run only:</strong> this preview did not create threads, posts, queue rows, imported-item records, or configuration changes.</p>';
     if (count($plan) > 100) {
         echo '<p>Showing the first 100 of ' . count($plan) . ' entries.</p>';
     }
     $page->output_footer();
+}
+
+function feedpublisher_admin_preview_saved()
+{
+    global $db, $mybb;
+
+    $id = $mybb->get_input('id', MyBB::INPUT_INT);
+    $feed = $db->fetch_array($db->simple_select('feedpublisher_feeds', '*', 'id=' . $id, array('limit' => 1)));
+    if (!$feed) {
+        flash_message('The selected feed does not exist.', 'error');
+        admin_redirect('index.php?module=config/feedpublisher');
+    }
+    feedpublisher_admin_initial_preview($feed);
 }

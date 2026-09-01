@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => '',
         'author' => 'SickProdigy',
         'authorsite' => '',
-        'version' => '0.1.6',
+        'version' => '0.1.7',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );

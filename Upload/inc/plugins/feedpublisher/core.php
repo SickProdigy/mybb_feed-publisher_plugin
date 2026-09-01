@@ -282,6 +282,19 @@ function feedpublisher_cleanup_html($html, $feed, $sourceUrl = '')
     return $cleaned;
 }
 
+function feedpublisher_prepare_item($feed, $item)
+{
+    $raw = (string) $item['content'];
+    $cleaned = feedpublisher_cleanup_html($raw, $feed, isset($item['url']) ? $item['url'] : '');
+    return array(
+        'raw_html' => $raw,
+        'cleaned_html' => $cleaned,
+        'content' => feedpublisher_html_to_mycode($cleaned),
+        'raw_bytes' => strlen($raw),
+        'cleaned_bytes' => strlen($cleaned),
+    );
+}
+
 function feedpublisher_html_to_mycode($html)
 {
     $html = preg_replace('#<(script|style|iframe|object|embed|form)[^>]*>.*?</\\1>#is', '', $html);
