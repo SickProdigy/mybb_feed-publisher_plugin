@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.10 - 2026-09-01
+
+- Add visible return-to-form, edit-feed, and feed-list navigation controls to
+  the dry-run preview.
+
 ## 0.1.9 - 2026-09-01
 
 - Use MyBB's administrator permission API so configured super administrators

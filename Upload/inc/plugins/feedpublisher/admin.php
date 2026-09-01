@@ -439,6 +439,13 @@ function feedpublisher_admin_initial_preview($values)
     if (count($plan) > 100) {
         echo '<p>Showing the first 100 of ' . count($plan) . ' entries.</p>';
     }
+    $listUrl = 'index.php?module=config/feedpublisher';
+    if (!empty($values['preview_initial'])) {
+        echo '<p><a class="button" href="' . $listUrl . '" onclick="history.back(); return false;">Return to form</a> ';
+    } else {
+        echo '<p><a class="button" href="' . $listUrl . '&amp;action=edit&amp;id=' . (int) $values['id'] . '">Edit feed</a> ';
+    }
+    echo '<a class="button" href="' . $listUrl . '">Back to feed list</a></p>';
     $page->output_footer();
 }
 
