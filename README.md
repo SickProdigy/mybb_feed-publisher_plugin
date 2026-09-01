@@ -19,7 +19,9 @@ Early development preview. The initial foundation includes:
 - persistent feed-entry staging with per-feed publication pacing, queue ordering,
   pause controls, bounded retries, and queue status counts;
 - per-feed initial import policies for all available entries, most recent only,
-  a bounded recent count, or starting after the current backlog.
+  a bounded recent count, or starting after the current backlog;
+- permission-aware MyBB thread creation through the official post data handler,
+  with configurable source attribution.
 
 ## Requirements
 
@@ -37,8 +39,9 @@ Early development preview. The initial foundation includes:
 
 Discovery stores entries in a persistent queue rather than publishing an entire
 feed at once. Queue release uses each feed publication interval, batch limit, and
-ordering preference. Actual MyBB thread creation remains disabled until the
-issue #3 publication pipeline is installed.
+ordering preference. Due queue entries are published as threads by the configured
+MyBB user after the destination forum and effective posting permissions are
+validated at runtime.
 
 ## Security model
 

@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => '',
         'author' => 'SickProdigy',
         'authorsite' => '',
-        'version' => '0.1.3',
+        'version' => '0.1.4',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -59,6 +59,7 @@ function feedpublisher_install()
             `initial_policy` varchar(16) NOT NULL DEFAULT 'latest',
             `initial_limit` smallint unsigned NOT NULL DEFAULT 1,
             `initialized_at` int unsigned NOT NULL DEFAULT 0,
+            `attribution_mode` varchar(16) NOT NULL DEFAULT 'link',
             `strip_selectors` text NULL,
             `last_checked` int unsigned NOT NULL DEFAULT 0,
             `last_published` int unsigned NOT NULL DEFAULT 0,
@@ -103,6 +104,7 @@ function feedpublisher_upgrade_schema()
         'initial_policy' => "varchar(16) NOT NULL DEFAULT 'latest' AFTER publishing_paused",
         'initial_limit' => "smallint unsigned NOT NULL DEFAULT 1 AFTER initial_policy",
         'initialized_at' => "int unsigned NOT NULL DEFAULT 0 AFTER initial_limit",
+        'attribution_mode' => "varchar(16) NOT NULL DEFAULT 'link' AFTER initialized_at",
         'last_published' => "int unsigned NOT NULL DEFAULT 0 AFTER `last_checked`",
     );
     foreach ($columns as $name => $definition) {

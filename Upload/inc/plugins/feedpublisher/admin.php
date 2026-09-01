@@ -140,6 +140,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'initial_policy' => 'latest',
         'initial_limit' => 1,
         'initialized_at' => 0,
+        'attribution_mode' => 'link',
         'strip_selectors' => '',
     ), $values);
 
@@ -170,6 +171,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->output_row('Feed URL <em>*</em>', 'The public HTTP or HTTPS RSS/Atom URL.', $form->generate_text_box('url', $values['url']));
     $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum.', $form->generate_select_box('fid', $forums, (int) $values['fid']));
     $container->output_row('Posting user <em>*</em>', 'The MyBB account used as the post author.', $form->generate_select_box('uid', $users, (int) $values['uid']));
+    $container->output_row('Source attribution <em>*</em>', 'Append a source link to every imported thread. Keeping attribution enabled is recommended.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
     $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent queues one; recent count queues a bounded number; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only', 'recent' => 'Recent count', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
     $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
     if (!empty($values['initialized_at'])) {
@@ -214,6 +216,7 @@ function feedpublisher_admin_save()
         'publishing_paused' => $mybb->get_input('publishing_paused', MyBB::INPUT_INT) ? 1 : 0,
         'initial_policy' => $mybb->get_input('initial_policy'),
         'initial_limit' => $mybb->get_input('initial_limit', MyBB::INPUT_INT),
+        'attribution_mode' => $mybb->get_input('attribution_mode'),
         'reset_initial_policy' => $mybb->get_input('reset_initial_policy', MyBB::INPUT_INT) ? 1 : 0,
         'preview_initial' => isset($mybb->input['preview_initial']) ? 1 : 0,
         'strip_selectors' => trim($mybb->get_input('strip_selectors')),
@@ -250,6 +253,9 @@ function feedpublisher_admin_save()
     }
     if (!in_array($values['queue_order'], array('oldest', 'newest'), true)) {
         $errors[] = 'Select a valid queue order.';
+    }
+    if (!in_array($values['attribution_mode'], array('link', 'title_link', 'none'), true)) {
+        $errors[] = 'Select a valid source attribution mode.';
     }
     if ($values['preview_initial'] && !$errors) {
         feedpublisher_admin_initial_preview($values);
@@ -292,6 +298,7 @@ function feedpublisher_admin_save()
         'publishing_paused' => $values['publishing_paused'],
         'initial_policy' => $db->escape_string($values['initial_policy']),
         'initial_limit' => $values['initial_limit'],
+        'attribution_mode' => $db->escape_string($values['attribution_mode']),
         'initialized_at' => ($policyChanged && $values['reset_initial_policy']) ? 0 : (int) ($currentFeed['initialized_at'] ?? 0),
         'last_checked' => ($policyChanged && $values['reset_initial_policy']) ? 0 : (int) ($currentFeed['last_checked'] ?? 0),
         'strip_selectors' => $db->escape_string($values['strip_selectors']),

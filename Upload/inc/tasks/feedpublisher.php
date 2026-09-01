@@ -79,9 +79,6 @@ function task_feedpublisher($task)
     $message = 'Checked ' . $totals['feeds'] . ' enabled feeds; staged ' . $totals['staged']
         . ', initially skipped ' . $totals['skipped'] . ', already known ' . $totals['existing'] . ', queue-full skips ' . $totals['full']
         . ', published ' . $totals['published'] . ', publication failures ' . $totals['failed'] . '.';
-    if (!function_exists('feedpublisher_publish_queued_item')) {
-        $message .= ' Publishing remains disabled until the issue #3 publisher is installed.';
-    }
     if ($errors) {
         $message .= ' Errors: ' . implode('; ', $errors);
     }

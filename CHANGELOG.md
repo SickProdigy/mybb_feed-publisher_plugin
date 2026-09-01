@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.4 - 2026-09-01
+
+- Publish due queue entries as MyBB threads through the official post data
+  handler and retain the resulting thread and post IDs.
+- Revalidate the configured forum, author, and effective posting permissions at
+  publication time.
+- Add configurable source-link attribution and restore the scheduled task's
+  original MyBB user context after every publication attempt.
+
 ## 0.1.3 - 2026-09-01
 
 - Add per-feed initial import policies for all available entries, the most recent
