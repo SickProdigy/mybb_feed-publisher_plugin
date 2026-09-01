@@ -36,11 +36,14 @@ function feedpublisher_discover_feed($feed)
                 $initialComplete = false;
             }
         }
+        $reconciled = feedpublisher_reconcile_missing_queued($feed, $items);
+        $totals['reconciled'] = $reconciled;
         $update = array(
             'last_checked' => TIME_NOW,
             'fetch_failures' => 0,
             'next_fetch_at' => 0,
             'last_error' => '',
+            'last_feed_item_count' => count($items),
         );
         if ($initializing && $initialComplete) {
             $update['initialized_at'] = TIME_NOW;

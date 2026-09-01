@@ -207,6 +207,18 @@ $suite->test('versioned fallback identities are deterministic', function ($t) {
     $t->assertSame(feedpublisher_item_key('https://example.com/a'), $legacy['key']);
 });
 
+$suite->test('strict reconciliation fails safe for empty and truncated feeds', function ($t) {
+    global $db;
+    $db = new FeedPublisherQueueDb;
+    $db->queue[1] = array('id' => 1, 'feed_id' => 7, 'item_key' => hash('sha256', 'missing'), 'state' => 'queued', 'available_at' => 0);
+    $feed = array('id' => 7, 'identity_strategy' => 'guid_link', 'strict_reconciliation' => 1, 'last_feed_item_count' => 2);
+    $t->assertSame(0, feedpublisher_reconcile_missing_queued($feed, array(), 100, false));
+    $one = array(array('key' => 'present', 'title' => 'Present', 'content' => 'Body'));
+    $t->assertSame(0, feedpublisher_reconcile_missing_queued($feed, $one, 100, false));
+    $two = array($one[0], array('key' => 'other', 'title' => 'Other', 'content' => 'Body'));
+    $t->assertSame(1, feedpublisher_reconcile_missing_queued($feed, $two, 100, false));
+});
+
 $suite->test('safe content URLs reject executable schemes', function ($t) {
     $t->assertSame(false, feedpublisher_safe_content_url('javascript:alert(1)'));
     $t->assertSame(false, feedpublisher_safe_content_url('data:text/html,bad'));

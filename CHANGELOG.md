@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.1.20 - 2026-09-01
+
+- Add per-feed age and per-state count retention for terminal queue records,
+  with permanent imported-item deduplication history as the safe default.
+- Add explicitly confirmed optional deduplication-history pruning, clear
+  republishing-risk warnings, dry-run impact counts, and a confirmed/logged
+  manual cleanup operation.
+- Bound automatic and manual cleanup to 100 records per run and add guarded
+  strict reconciliation that rejects only unpublished queued entries after a
+  successful non-empty, non-truncated feed scan.
+- Preserve all published MyBB threads and posts; no automatic published-content
+  deletion or modification is provided.
+
 ## 0.1.19 - 2026-09-01
 
 - Add bounded website feed discovery from declared RSS, RDF, and Atom alternate

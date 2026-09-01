@@ -305,15 +305,102 @@ function feedpublisher_queue_dispatch($feed, $publisher, $force = false)
     return $result;
 }
 
-function feedpublisher_queue_prune($feedId, $retentionDays = 90)
+function feedpublisher_retention_candidate_ids($feed, $limit = 100)
 {
     global $db;
+    $limit = max(1, min(100, (int) $limit));
+    $feedId = (int) $feed['id'];
+    $days = max(1, min(3650, (int) $feed['terminal_retention_days']));
+    $keep = max(100, min(100000, (int) $feed['terminal_retention_count']));
+    $cutoff = TIME_NOW - $days * 86400;
+    $ids = array();
+    foreach (array('published', 'skipped', 'rejected', 'failed') as $state) {
+        if (count($ids) >= $limit) { break; }
+        $timeField = $state === 'failed' ? 'last_attempt' : 'published_at';
+        $query = $db->simple_select('feedpublisher_queue', 'id', "feed_id={$feedId} AND state='{$state}' AND {$timeField}>0 AND {$timeField}<{$cutoff}", array(
+            'order_by' => $timeField, 'order_dir' => 'ASC', 'limit' => $limit - count($ids),
+        ));
+        while ($row = $db->fetch_array($query)) { $ids[(int) $row['id']] = (int) $row['id']; }
+        if (count($ids) >= $limit) { break; }
+        $total = (int) $db->fetch_field($db->simple_select('feedpublisher_queue', 'COUNT(id) AS total', "feed_id={$feedId} AND state='{$state}'"), 'total');
+        $overflow = max(0, $total - $keep);
+        if ($overflow) {
+            $query = $db->simple_select('feedpublisher_queue', 'id', "feed_id={$feedId} AND state='{$state}'", array(
+                'order_by' => $timeField . ',id', 'order_dir' => 'ASC', 'limit' => min($overflow, $limit - count($ids)),
+            ));
+            while ($row = $db->fetch_array($query)) { $ids[(int) $row['id']] = (int) $row['id']; }
+        }
+    }
+    return array_values($ids);
+}
 
-    $cutoff = TIME_NOW - max(1, (int) $retentionDays) * 86400;
-    $db->delete_query(
-        'feedpublisher_queue',
-        'feed_id=' . (int) $feedId . " AND state='published' AND published_at>0 AND published_at<{$cutoff}"
-    );
+function feedpublisher_retention_cleanup($feed, $limit = 100)
+{
+    global $db;
+    $limit = max(1, min(100, (int) $limit));
+    $queueIds = feedpublisher_retention_candidate_ids($feed, $limit);
+    if ($queueIds) {
+        $db->delete_query('feedpublisher_queue', 'feed_id=' . (int) $feed['id'] . ' AND id IN (' . implode(',', $queueIds) . ')');
+    }
+    $dedupeDeleted = 0;
+    $remaining = $limit - count($queueIds);
+    $dedupeDays = isset($feed['dedupe_retention_days']) ? (int) $feed['dedupe_retention_days'] : 0;
+    if ($remaining > 0 && $dedupeDays > 0) {
+        $cutoff = TIME_NOW - max(1, min(3650, $dedupeDays)) * 86400;
+        $ids = array();
+        $query = $db->simple_select('feedpublisher_items', 'id', 'feed_id=' . (int) $feed['id'] . " AND imported_at>0 AND imported_at<{$cutoff}", array(
+            'order_by' => 'imported_at', 'order_dir' => 'ASC', 'limit' => $remaining,
+        ));
+        while ($row = $db->fetch_array($query)) { $ids[] = (int) $row['id']; }
+        if ($ids) {
+            $db->delete_query('feedpublisher_items', 'feed_id=' . (int) $feed['id'] . ' AND id IN (' . implode(',', $ids) . ')');
+            $dedupeDeleted = count($ids);
+        }
+    }
+    return array('queue' => count($queueIds), 'dedupe' => $dedupeDeleted);
+}
+
+function feedpublisher_reconcile_missing_queued($feed, $items, $limit = 100, $apply = true)
+{
+    global $db;
+    $currentCount = count($items);
+    $previousCount = isset($feed['last_feed_item_count']) ? (int) $feed['last_feed_item_count'] : 0;
+    if (empty($feed['strict_reconciliation']) || $currentCount === 0 || $previousCount === 0 || $currentCount < $previousCount) {
+        return 0;
+    }
+    $present = array();
+    foreach ($items as $item) {
+        $identity = feedpublisher_derive_item_identity($feed, $item);
+        if ($identity['key'] !== '') { $present[$identity['key']] = true; }
+    }
+    if (!$present) { return 0; }
+    $missing = array();
+    $query = $db->simple_select('feedpublisher_queue', 'id,item_key', 'feed_id=' . (int) $feed['id'] . " AND state='queued'", array(
+        'order_by' => 'id', 'order_dir' => 'ASC', 'limit' => max(1, min(100, (int) $limit)),
+    ));
+    while ($row = $db->fetch_array($query)) {
+        if (!isset($present[$row['item_key']])) { $missing[] = (int) $row['id']; }
+    }
+    if ($missing && $apply) {
+        $db->update_query('feedpublisher_queue', array('state' => 'rejected', 'published_at' => TIME_NOW,
+            'last_error' => $db->escape_string('Rejected by strict source reconciliation: entry is no longer declared by the source feed.')),
+            'feed_id=' . (int) $feed['id'] . " AND state='queued' AND id IN (" . implode(',', $missing) . ')');
+    }
+    return count($missing);
+}
+
+function feedpublisher_retention_preview($feed)
+{
+    global $db;
+    $queue = count(feedpublisher_retention_candidate_ids($feed, 100));
+    $dedupe = 0;
+    $days = isset($feed['dedupe_retention_days']) ? (int) $feed['dedupe_retention_days'] : 0;
+    if ($days > 0) {
+        $cutoff = TIME_NOW - max(1, min(3650, $days)) * 86400;
+        $dedupe = min(100 - $queue, (int) $db->fetch_field($db->simple_select('feedpublisher_items', 'COUNT(id) AS total',
+            'feed_id=' . (int) $feed['id'] . " AND imported_at>0 AND imported_at<{$cutoff}"), 'total'));
+    }
+    return array('queue' => $queue, 'dedupe' => max(0, $dedupe));
 }
 
 function feedpublisher_initial_stage_plan($feed, $items)

@@ -26,7 +26,7 @@ function task_feedpublisher($task)
     $query = $db->simple_select('feedpublisher_feeds', '*', 'enabled=1', array('order_by' => 'id'));
     while ($feed = $db->fetch_array($query)) {
         ++$totals['feeds'];
-        feedpublisher_queue_prune((int) $feed['id']);
+        feedpublisher_retention_cleanup($feed, 100);
         $discoveryInterval = max(5, (int) $feed['interval_minutes']) * 60;
         $discoveryDue = (int) $feed['fetch_failures'] > 0
             ? (int) $feed['next_fetch_at'] <= TIME_NOW

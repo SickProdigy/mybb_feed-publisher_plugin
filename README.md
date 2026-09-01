@@ -54,6 +54,15 @@ combined strategy avoids more false matches but will not recognize edited
 copies. Changing strategy requires an explicit queue/import-history reset and
 may make previously published source entries eligible again.
 
+Terminal queue history has configurable age and per-state count limits and is
+cleaned in batches of at most 100 records. Imported-item duplicate history is
+retained forever by default; enabling age-based pruning requires explicit risk
+confirmation because an old source entry may then become eligible again. Strict
+source reconciliation is optional and rejects only unpublished queued entries
+missing from a successful, non-empty feed scan. It is suppressed whenever the
+feed's entry count unexpectedly shrinks. These policies never delete or modify
+published MyBB threads or posts.
+
 Cleanup runs on source HTML before safe MyCode conversion. Each feed can remove
 common byline/source blocks, up to 50 simple element selectors, and up to 20
 validated removal-only regular expressions. Supported selectors are `tag`,

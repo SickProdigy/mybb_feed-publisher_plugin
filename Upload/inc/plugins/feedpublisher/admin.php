@@ -152,6 +152,10 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'future_date_policy' => 'hold',
         'schedule_jitter_minutes' => 0,
         'identity_strategy' => 'guid_link',
+        'terminal_retention_days' => 90,
+        'terminal_retention_count' => 1000,
+        'dedupe_retention_days' => 0,
+        'strict_reconciliation' => 0,
         'enabled' => 0,
         'interval_minutes' => 60,
         'publish_interval_minutes' => 60,
@@ -221,6 +225,14 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     if (!empty($values['id'])) {
         $container->output_row('Duplicate identity change', 'Changing the strategy cannot safely translate old hashes. Resetting removes this feed\'s queue and duplicate history, but does not delete existing MyBB threads; previously published entries may become eligible again.', $form->generate_check_box('reset_identity_history', 1, 'Confirm identity-strategy change and reset queue/import history.'));
     }
+    $container->output_row('Terminal queue retention', 'Keep published, skipped, rejected, and failed queue rows for this many days (1 to 3650) and at most this many rows per state (100 to 100000). Cleanup removes at most 100 rows per run.',
+        'Days: ' . $form->generate_numeric_field('terminal_retention_days', (int) $values['terminal_retention_days'], array('min' => 1, 'max' => 3650))
+        . ' &nbsp; Per-state rows: ' . $form->generate_numeric_field('terminal_retention_count', (int) $values['terminal_retention_count'], array('min' => 100, 'max' => 100000)));
+    $container->output_row('Duplicate-history retention', '0 keeps imported-item deduplication records forever (recommended). A nonzero day limit can allow old source entries to publish again after pruning.',
+        $form->generate_numeric_field('dedupe_retention_days', (int) $values['dedupe_retention_days'], array('min' => 0, 'max' => 3650))
+        . '<br>' . $form->generate_check_box('confirm_dedupe_pruning', 1, 'I understand that pruning duplicate history can allow old entries to be republished.'));
+    $container->output_row('Strict source reconciliation', 'After a successful non-empty scan, reject unpublished queued entries no longer present only when the feed has not unexpectedly shrunk. Published MyBB content is never changed.',
+        $form->generate_check_box('strict_reconciliation', 1, 'Reject missing unpublished queue entries', array('checked' => !empty($values['strict_reconciliation']))));
     $container->output_row('Source attribution <em>*</em>', 'Append a source link to every imported thread. Keeping attribution enabled is recommended.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
     $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent queues one; recent count queues a bounded number; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only', 'recent' => 'Recent count', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
     $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
@@ -319,6 +331,11 @@ function feedpublisher_admin_save()
         'schedule_jitter_minutes' => $mybb->get_input('schedule_jitter_minutes', MyBB::INPUT_INT),
         'identity_strategy' => $mybb->get_input('identity_strategy'),
         'reset_identity_history' => $mybb->get_input('reset_identity_history', MyBB::INPUT_INT) ? 1 : 0,
+        'terminal_retention_days' => $mybb->get_input('terminal_retention_days', MyBB::INPUT_INT),
+        'terminal_retention_count' => $mybb->get_input('terminal_retention_count', MyBB::INPUT_INT),
+        'dedupe_retention_days' => $mybb->get_input('dedupe_retention_days', MyBB::INPUT_INT),
+        'confirm_dedupe_pruning' => $mybb->get_input('confirm_dedupe_pruning', MyBB::INPUT_INT) ? 1 : 0,
+        'strict_reconciliation' => $mybb->get_input('strict_reconciliation', MyBB::INPUT_INT) ? 1 : 0,
         'interval_minutes' => $mybb->get_input('interval_minutes', MyBB::INPUT_INT),
         'publish_interval_minutes' => $mybb->get_input('publish_interval_minutes', MyBB::INPUT_INT),
         'max_posts_per_run' => $mybb->get_input('max_posts_per_run', MyBB::INPUT_INT),
@@ -395,6 +412,20 @@ function feedpublisher_admin_save()
     if (!in_array($values['identity_strategy'], array('guid_link', 'title', 'content', 'title_content'), true)) {
         $errors[] = 'Select a valid duplicate identity strategy.';
     }
+    if ($values['terminal_retention_days'] < 1 || $values['terminal_retention_days'] > 3650) {
+        $errors[] = 'Terminal queue retention must be between 1 and 3650 days.';
+    }
+    if ($values['terminal_retention_count'] < 100 || $values['terminal_retention_count'] > 100000) {
+        $errors[] = 'Terminal queue retention count must be between 100 and 100000 per state.';
+    }
+    if ($values['dedupe_retention_days'] < 0 || $values['dedupe_retention_days'] > 3650) {
+        $errors[] = 'Duplicate-history retention must be 0 or between 1 and 3650 days.';
+    }
+    $dedupePruningChanged = $values['dedupe_retention_days'] > 0
+        && (!$currentFeed || (int) $currentFeed['dedupe_retention_days'] !== $values['dedupe_retention_days']);
+    if ($dedupePruningChanged && !$values['confirm_dedupe_pruning']) {
+        $errors[] = 'Confirm the duplicate-history risk before enabling or changing destructive deduplication pruning.';
+    }
     if ($values['interval_minutes'] < 5 || $values['interval_minutes'] > 10080) {
         $errors[] = 'The import interval must be between 5 and 10080 minutes.';
     }
@@ -468,6 +499,10 @@ function feedpublisher_admin_save()
         'future_date_policy' => $db->escape_string($values['future_date_policy']),
         'schedule_jitter_minutes' => $values['schedule_jitter_minutes'],
         'identity_strategy' => $db->escape_string($values['identity_strategy']),
+        'terminal_retention_days' => $values['terminal_retention_days'],
+        'terminal_retention_count' => $values['terminal_retention_count'],
+        'dedupe_retention_days' => $values['dedupe_retention_days'],
+        'strict_reconciliation' => $values['strict_reconciliation'],
         'enabled' => $values['enabled'],
         'interval_minutes' => $values['interval_minutes'],
         'publish_interval_minutes' => $values['publish_interval_minutes'],
@@ -581,6 +616,15 @@ function feedpublisher_admin_initial_preview($values)
         . ' &middot; <strong>Source encoding:</strong> ' . htmlspecialchars_uni($parseMetadata['encoding'])
         . (!empty($parseMetadata['content_type_fallback']) ? ' &middot; <strong>Content type:</strong> accepted after XML validation' : '')
         . '</div>';
+    if (!empty($values['id'])) {
+        $retentionPreview = feedpublisher_retention_preview($values);
+        $reconcilePreview = feedpublisher_reconcile_missing_queued($values, $items, 100, false);
+        echo '<div style="margin:12px 0;padding:10px;border:1px solid #ccc;background:#f7f7f7"><strong>Policy preview (next bounded batch):</strong> '
+            . 'terminal queue rows removed: ' . (int) $retentionPreview['queue']
+            . ' &middot; duplicate-history rows removed: ' . (int) $retentionPreview['dedupe']
+            . ' &middot; missing queued entries rejected: ' . (int) $reconcilePreview
+            . '. Published MyBB threads/posts are never deleted.</div>';
+    }
     foreach (array_slice($plan, 0, 100) as $index => $entry) {
         $item = $entry['item'];
         $datePlan = isset($entry['date_plan']) ? $entry['date_plan'] : feedpublisher_source_date_plan($values, $item);
@@ -769,6 +813,14 @@ function feedpublisher_admin_operations_page()
     feedpublisher_admin_operation_form($id, 'clear_queue', 'Clear eligible queue', 'Confirm permanent deletion of queued and failed entries.');
     $table->construct_cell(ob_get_clean());
     $table->construct_row();
+
+    $retentionPreview = feedpublisher_retention_preview($feed);
+    $table->construct_cell('<strong>Run retention cleanup</strong><br><small>Apply one bounded batch under the saved policy. MyBB threads and posts are never deleted.</small>');
+    $table->construct_cell('Next batch: ' . $retentionPreview['queue'] . ' terminal queue rows; ' . $retentionPreview['dedupe'] . ' duplicate-history rows');
+    ob_start();
+    feedpublisher_admin_operation_form($id, 'retention_cleanup', 'Run cleanup', 'Confirm this permanent bounded cleanup. Pruned duplicate history may allow old entries to publish again.');
+    $table->construct_cell(ob_get_clean());
+    $table->construct_row();
     $table->output('Manual controls');
 
     $queueTable = new Table;
@@ -831,7 +883,7 @@ function feedpublisher_admin_operation_commit()
         admin_redirect('index.php?module=config/feedpublisher');
     }
 
-    $confirmedOperations = array('toggle_pause', 'reset_backoff', 'clear_queue', 'resolve_uncertain');
+    $confirmedOperations = array('toggle_pause', 'reset_backoff', 'clear_queue', 'retention_cleanup', 'resolve_uncertain');
     if (in_array($operation, $confirmedOperations, true) && !$mybb->get_input('confirm', MyBB::INPUT_INT)) {
         flash_message('Confirm the requested state-changing operation before continuing.', 'error');
         admin_redirect('index.php?module=config/feedpublisher&action=operations&id=' . $id);
@@ -872,6 +924,9 @@ function feedpublisher_admin_operation_commit()
         } elseif ($operation === 'clear_queue') {
             $db->delete_query('feedpublisher_queue', 'feed_id=' . $id . " AND state IN ('queued','failed')");
             $message = 'Deleted ' . $db->affected_rows() . ' queued or failed entries.';
+        } elseif ($operation === 'retention_cleanup') {
+            $result = feedpublisher_retention_cleanup($feed, 100);
+            $message = 'Retention cleanup deleted ' . $result['queue'] . ' terminal queue rows and ' . $result['dedupe'] . ' duplicate-history rows.';
         } elseif ($operation === 'resolve_uncertain') {
             $queueId = $mybb->get_input('queue_id', MyBB::INPUT_INT);
             $resolution = $mybb->get_input('resolution');
