@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.16 - 2026-09-01
+
+- Add dependency-free regression tests for parsing fixtures, sanitization and
+  URL safety, cleanup rules, identity keys, title/date policies, concurrent
+  reservations, publication rollback, lifecycle guards, and documentation.
+- Add explicit extension-based skips, a one-command lint/test runner, testing
+  documentation, known limitations, and a real-MyBB release checklist.
+
 ## 0.1.15 - 2026-09-01
 
 - Add per-feed MyBB publication-time or valid source-time thread timestamps.

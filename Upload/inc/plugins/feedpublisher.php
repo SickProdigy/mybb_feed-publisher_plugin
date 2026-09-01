@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://sickgaming.net',
         'author' => 'SickProdigy',
         'authorsite' => 'https://sickgaming.net',
-        'version' => '0.1.15',
+        'version' => '0.1.16',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );

@@ -86,6 +86,24 @@ is pinned for the connection, redirects are rejected, XML response types are
 required, and responses are capped at 2 MiB. Failed discovery uses persistent
 exponential backoff from 5 minutes up to 6 hours.
 
+## Testing
+
+Run `./tests/lint.sh` from the repository root. PHP DOM and SimpleXML are needed
+for the parser and sanitizer fixtures; missing extensions are shown as skipped
+tests. Stable releases also follow [the release checklist](docs/RELEASE_CHECKLIST.md)
+on a real MyBB installation.
+
+## Known limitations
+
+- Feed redirects are rejected rather than followed.
+- Feed responses are limited to accepted XML content types and 2 MiB.
+- The current parser targets RSS 2.0 and Atom; broader feed and encoding support
+  is tracked separately.
+- Remote media attachments, full-article extraction, moderation, and AI cleanup
+  are not part of the current Core MVP.
+- Automated test doubles cannot replace the documented MyBB database, task,
+  permission, and end-to-end publication checks.
+
 ## License
 
 GNU General Public License v3.0 or later. See [LICENSE](LICENSE).

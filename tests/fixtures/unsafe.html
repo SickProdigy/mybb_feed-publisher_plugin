@@ -1,0 +1,7 @@
+<div onclick="alert(1)">
+  <script>alert('bad')</script>
+  <p>Safe <strong>text</strong></p>
+  <a href="javascript:alert(1)">bad link</a>
+  <a href="https://example.com/good">good link</a>
+  <img src="data:text/html,bad" onerror="alert(1)">
+</div>
