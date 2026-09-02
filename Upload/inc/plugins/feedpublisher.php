@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://sickgaming.net',
         'author' => 'SickProdigy',
         'authorsite' => 'https://sickgaming.net',
-        'version' => '0.1.23',
+        'version' => '0.1.24',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -66,6 +66,7 @@ function feedpublisher_install()
             `maximum_source_age_days` smallint unsigned NOT NULL DEFAULT 0,
             `require_entry_body` tinyint(1) NOT NULL DEFAULT 0,
             `require_entry_media` tinyint(1) NOT NULL DEFAULT 0,
+            `media_mode` varchar(16) NOT NULL DEFAULT 'ignore',
             `enabled` tinyint(1) NOT NULL DEFAULT 0,
             `interval_minutes` smallint unsigned NOT NULL DEFAULT 60,
             `publish_interval_minutes` smallint unsigned NOT NULL DEFAULT 60,
@@ -142,6 +143,7 @@ function feedpublisher_upgrade_schema()
         'maximum_source_age_days' => "smallint unsigned NOT NULL DEFAULT 0 AFTER `minimum_source_age_hours`",
         'require_entry_body' => "tinyint(1) NOT NULL DEFAULT 0 AFTER `maximum_source_age_days`",
         'require_entry_media' => "tinyint(1) NOT NULL DEFAULT 0 AFTER `require_entry_body`",
+        'media_mode' => "varchar(16) NOT NULL DEFAULT 'ignore' AFTER `require_entry_media`",
         'interval_minutes' => "smallint unsigned NOT NULL DEFAULT 60 AFTER `enabled`",
         'publish_interval_minutes' => "smallint unsigned NOT NULL DEFAULT 60 AFTER `interval_minutes`",
         'max_posts_per_run' => "smallint unsigned NOT NULL DEFAULT 1 AFTER `publish_interval_minutes`",
@@ -175,6 +177,9 @@ function feedpublisher_upgrade_schema()
     if ($db->table_exists('feedpublisher_queue') && !$db->field_exists('author', 'feedpublisher_queue')) {
         $db->add_column('feedpublisher_queue', 'author', "varchar(255) NOT NULL DEFAULT '' AFTER source_url");
     }
+    if ($db->table_exists('feedpublisher_queue') && !$db->field_exists('media_json', 'feedpublisher_queue')) {
+        $db->add_column('feedpublisher_queue', 'media_json', "text NULL AFTER author");
+    }
 
     if (!$db->table_exists('feedpublisher_queue')) {
         $collation = $db->build_create_table_collation();
@@ -185,6 +190,7 @@ function feedpublisher_upgrade_schema()
             `title` varchar(255) NOT NULL DEFAULT '',
             `source_url` varchar(2048) NOT NULL DEFAULT '',
             `author` varchar(255) NOT NULL DEFAULT '',
+            `media_json` text NULL,
             `raw_content` mediumtext NOT NULL,
             `content` mediumtext NOT NULL,
             `source_published` int unsigned NOT NULL DEFAULT 0,

@@ -220,6 +220,13 @@ function feedpublisher_compose_post($feed, $item)
     $header = feedpublisher_render_template(isset($feed['post_header']) ? $feed['post_header'] : '', $feed, $item);
     if (trim($header) !== '') $parts[] = trim($header);
     $parts[] = $body;
+    $media = isset($item['media']) && is_array($item['media']) ? $item['media'] : array();
+    if (!$media && !empty($item['media_json'])) {
+        $decoded = json_decode($item['media_json'], true);
+        if (is_array($decoded)) $media = $decoded;
+    }
+    $mediaBlock = feedpublisher_compose_media($media, isset($feed['media_mode']) ? $feed['media_mode'] : 'ignore');
+    if ($mediaBlock !== '') $parts[] = $mediaBlock;
     if ($truncated && isset($feed['continuation_mode']) && $feed['continuation_mode'] === 'source_link') {
         $url = isset($item['source_url']) ? $item['source_url'] : (isset($item['url']) ? $item['url'] : '');
         if (feedpublisher_safe_content_url($url)) {
@@ -232,4 +239,25 @@ function feedpublisher_compose_post($feed, $item)
     if (trim($footer) !== '') $parts[] = trim($footer);
     $body = feedpublisher_add_source_attribution(implode("\n\n", $parts), $item, isset($feed['attribution_mode']) ? $feed['attribution_mode'] : 'link');
     return array('title' => feedpublisher_build_subject($item['title'], isset($feed['title_prefix']) ? $feed['title_prefix'] : ''), 'body' => $body, 'truncated' => $truncated);
+}
+
+function feedpublisher_compose_media($media, $mode)
+{
+    if ($mode === 'ignore' || !is_array($media)) return '';
+    $output = array();
+    $seen = array();
+    foreach (array_slice($media, 0, 10) as $entry) {
+        $url = isset($entry['url']) ? trim($entry['url']) : '';
+        if (!feedpublisher_safe_media_url($url) || isset($seen[$url])) continue;
+        $url = str_replace(array('[', ']'), array('%5B', '%5D'), $url);
+        $kind = isset($entry['kind']) ? $entry['kind'] : 'file';
+        if ($mode === 'hotlink' && $kind === 'image') {
+            $output[] = '[img]' . $url . '[/img]';
+        } else {
+            $label = $kind === 'video' ? 'View video' : ($kind === 'image' ? 'View image' : 'View media');
+            $output[] = '[url=' . $url . ']' . $label . '[/url]';
+        }
+        $seen[$url] = true;
+    }
+    return implode("\n", $output);
 }

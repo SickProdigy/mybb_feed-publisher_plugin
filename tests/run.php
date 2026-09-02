@@ -301,6 +301,23 @@ $suite->test('default post composition preserves the existing body behavior', fu
     $t->assertSame(false, $post['truncated']);
 });
 
+$suite->test('media composition hotlinks only images and safely links other media', function ($t) {
+    $media = array(
+        array('url' => 'https://example.com/image.jpg', 'kind' => 'image'),
+        array('url' => 'https://example.com/video.mp4', 'kind' => 'video'),
+        array('url' => 'javascript:alert(1)', 'kind' => 'image'),
+        array('url' => 'http://127.0.0.1/private.jpg', 'kind' => 'image'),
+    );
+    $hotlinks = feedpublisher_compose_media($media, 'hotlink');
+    $t->assertContains('[img]https://example.com/image.jpg[/img]', $hotlinks);
+    $t->assertContains('[url=https://example.com/video.mp4]View video[/url]', $hotlinks);
+    $t->assertNotContains('javascript:', $hotlinks);
+    $t->assertNotContains('127.0.0.1', $hotlinks);
+    $links = feedpublisher_compose_media($media, 'links');
+    $t->assertContains('[url=https://example.com/image.jpg]View image[/url]', $links);
+    $t->assertSame('', feedpublisher_compose_media($media, 'ignore'));
+});
+
 $suite->test('future-date policies and dateline fallback', function ($t) {
     $base = array('thread_date_mode' => 'source', 'schedule_jitter_minutes' => 0);
     $future = TIME_NOW + 3600;
@@ -351,6 +368,9 @@ $suite->test('RSS, RDF, and Atom fixtures parse with format metadata', function 
     $t->assertSame('fixture-rss-1', $rss[0]['key']);
     $t->assertSame(array('Giveaways'), $rss[0]['categories']);
     $t->assertSame(true, $rss[0]['has_media']);
+    $t->assertSame('image', $rss[0]['media'][0]['kind']);
+    $t->assertSame('enclosure', $rss[0]['media'][0]['source']);
+    $t->assertSame('image/jpeg', $rss[0]['media'][0]['type']);
     $t->assertSame('RSS 2.0', $metadata['format']);
     $legacy = feedpublisher_parse(file_get_contents(__DIR__ . '/fixtures/rss-092.xml'), array(), $metadata);
     $t->assertSame('https://example.com/legacy-entry', $legacy[0]['key']);

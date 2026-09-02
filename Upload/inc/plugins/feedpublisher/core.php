@@ -359,20 +359,7 @@ function feedpublisher_parse($xml, $fetchMetadata = array(), &$parseMetadata = n
             $category = trim($category);
             if ($category !== '') { $categories[] = $category; }
         }
-        $hasMedia = false;
-        foreach ($xpath->query('.//*', $entry) as $contentNode) {
-            $localName = strtolower($contentNode->localName);
-            if (in_array($localName, array('enclosure', 'image', 'thumbnail'), true)
-                || ($contentNode->namespaceURI === 'http://search.yahoo.com/mrss/' && $localName === 'content')) {
-                $hasMedia = true;
-                break;
-            }
-        }
-        if (!$hasMedia && $format === 'Atom') {
-            foreach ($xpath->query('./*[local-name()="link"]', $entry) as $candidate) {
-                if (strtolower(trim($candidate->getAttribute('rel'))) === 'enclosure') { $hasMedia = true; break; }
-            }
-        }
+        $media = feedpublisher_parse_entry_media($xpath, $entry, $base);
         $items[] = array(
             'key' => trim($key),
             'title' => trim($title),
@@ -381,7 +368,8 @@ function feedpublisher_parse($xml, $fetchMetadata = array(), &$parseMetadata = n
             'published' => feedpublisher_parse_source_date($date),
             'author' => trim(feedpublisher_dom_first_text($entry, array('author', 'creator'))),
             'categories' => array_values(array_unique($categories)),
-            'has_media' => $hasMedia,
+            'has_media' => !empty($media),
+            'media' => $media,
         );
     }
 
@@ -392,6 +380,40 @@ function feedpublisher_parse($xml, $fetchMetadata = array(), &$parseMetadata = n
         throw new FeedPublisherException('parse', 'The feed contains more than 1,000 entries.');
     }
     return $items;
+}
+
+function feedpublisher_parse_entry_media(DOMXPath $xpath, DOMElement $entry, $base)
+{
+    $media = array();
+    $seen = array();
+    foreach ($xpath->query('.//*', $entry) as $node) {
+        $local = strtolower($node->localName);
+        $source = '';
+        $url = '';
+        if ($local === 'enclosure') {
+            $source = 'enclosure';
+            $url = $node->getAttribute('url');
+        } elseif ($node->namespaceURI === 'http://search.yahoo.com/mrss/' && $local === 'content') {
+            $source = 'media:content';
+            $url = $node->getAttribute('url');
+        } elseif ($node->namespaceURI === 'http://search.yahoo.com/mrss/' && $local === 'thumbnail') {
+            $source = 'media:thumbnail';
+            $url = $node->getAttribute('url');
+        } elseif ($local === 'link' && strtolower(trim($node->getAttribute('rel'))) === 'enclosure') {
+            $source = 'Atom enclosure';
+            $url = $node->getAttribute('href');
+        }
+        if ($source === '' || count($media) >= 10) continue;
+        $url = feedpublisher_resolve_relative_content_url($url, feedpublisher_dom_xml_base($node, $base));
+        if (!feedpublisher_safe_media_url($url) || strlen($url) > 2048 || isset($seen[$url])) continue;
+        $type = strtolower(trim($node->getAttribute('type')));
+        $medium = strtolower(trim($node->getAttribute('medium')));
+        $kind = ($source === 'media:thumbnail' || strpos($type, 'image/') === 0 || $medium === 'image') ? 'image'
+            : ((strpos($type, 'video/') === 0 || $medium === 'video') ? 'video' : 'file');
+        $media[] = array('url' => $url, 'type' => substr($type, 0, 100), 'kind' => $kind, 'source' => $source);
+        $seen[$url] = true;
+    }
+    return $media;
 }
 
 function feedpublisher_canonical_encoding($encoding)
@@ -935,4 +957,15 @@ function feedpublisher_safe_content_url($url)
 {
     $parts = parse_url($url);
     return $parts && isset($parts['scheme']) && in_array(strtolower($parts['scheme']), array('http', 'https'), true);
+}
+
+function feedpublisher_safe_media_url($url)
+{
+    $parts = parse_url(trim((string) $url));
+    if (!$parts || empty($parts['scheme']) || empty($parts['host'])
+        || !in_array(strtolower($parts['scheme']), array('http', 'https'), true)
+        || isset($parts['user']) || isset($parts['pass'])) return false;
+    $host = trim($parts['host'], '[]');
+    return !filter_var($host, FILTER_VALIDATE_IP)
+        || filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
 }

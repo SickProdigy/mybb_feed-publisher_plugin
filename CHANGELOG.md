@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.24 - 2026-09-02
+
+- Parse up to 10 distinct RSS enclosures, Media RSS content/thumbnail records,
+  and Atom enclosure links per entry using resolved safe HTTP/HTTPS URLs.
+- Add per-feed media handling to ignore metadata, append ordinary media links,
+  or hotlink images while always degrading videos and unknown files to links.
+- Persist parsed media with the prepared queue snapshot so publication performs
+  no new remote request and uses the exact metadata shown by dry run.
+- Show media source, kind, supplied MIME type, URL, and intended treatment in
+  previews; never download attachments or emit raw iframe/embed HTML.
+
 ## 0.1.23 - 2026-09-01
 
 - Add optional per-feed MyCode headers and footers with a strict placeholder

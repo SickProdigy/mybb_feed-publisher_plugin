@@ -101,6 +101,13 @@ plain-text excerpt with an optional configurable source link. The normal source
 attribution setting is applied afterward, and dry run uses the same final
 composition path as publication.
 
+Feed media handling recognizes RSS enclosures, Media RSS content and thumbnails,
+and Atom enclosure links. A feed can ignore them, append safe ordinary links, or
+hotlink images with MyBB's `[img]` code; videos and unknown files always remain
+normal links. At most 10 distinct HTTP/HTTPS media URLs are retained per entry.
+Feed Publisher does not download attachments, inspect remote media, create local
+files, or insert iframe/embed HTML, so there is no plugin-owned media cleanup.
+
 Thread dates can use the time Feed Publisher posts to MyBB or a valid source
 publication time. Future-dated entries can be held, published using the current
 time, marked as seen, or permanently rejected. Source dates before 1980 or more

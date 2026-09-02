@@ -277,6 +277,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'maximum_source_age_days' => 0,
         'require_entry_body' => 0,
         'require_entry_media' => 0,
+        'media_mode' => 'ignore',
         'enabled' => 0,
         'interval_minutes' => 60,
         'publish_interval_minutes' => 60,
@@ -367,6 +368,8 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->output_row('Required entry content', 'Reject entries before queueing when required source content is absent.',
         $form->generate_check_box('require_entry_body', 1, 'Require a non-empty body', array('checked' => !empty($values['require_entry_body']))) . '<br>'
         . $form->generate_check_box('require_entry_media', 1, 'Require an image, enclosure, or Media RSS item', array('checked' => !empty($values['require_entry_media']))));
+    $container->output_row('Feed media', 'Handle up to 10 safe HTTP/HTTPS enclosure, Media RSS, thumbnail, or Atom enclosure URLs per entry. Images can be hotlinked; videos and other files always become ordinary links. No files are downloaded and no embeds or iframes are created.',
+        $form->generate_select_box('media_mode', array('ignore' => 'Ignore feed media (default)', 'links' => 'Add safe media links', 'hotlink' => 'Show images; link videos and files'), $values['media_mode']));
     if (!empty($values['id'])) {
         $container->output_row('Eligibility rule changes', 'Changing eligibility requires explicit re-evaluation. This removes only prior filter-rejection history so currently visible entries can be evaluated again.',
             $form->generate_check_box('reset_filter_history', 1, 'Confirm filter change and re-evaluate previously filtered entries.'));
@@ -484,6 +487,7 @@ function feedpublisher_admin_save()
         'maximum_source_age_days' => $mybb->get_input('maximum_source_age_days', MyBB::INPUT_INT),
         'require_entry_body' => $mybb->get_input('require_entry_body', MyBB::INPUT_INT) ? 1 : 0,
         'require_entry_media' => $mybb->get_input('require_entry_media', MyBB::INPUT_INT) ? 1 : 0,
+        'media_mode' => $mybb->get_input('media_mode'),
         'reset_filter_history' => $mybb->get_input('reset_filter_history', MyBB::INPUT_INT) ? 1 : 0,
         'interval_minutes' => $mybb->get_input('interval_minutes', MyBB::INPUT_INT),
         'publish_interval_minutes' => $mybb->get_input('publish_interval_minutes', MyBB::INPUT_INT),
@@ -584,6 +588,7 @@ function feedpublisher_admin_save()
         || $values['maximum_source_age_days'] < 0 || $values['maximum_source_age_days'] > 3650) {
         $errors[] = 'Source age filters are outside their allowed range.';
     }
+    if (!in_array($values['media_mode'], array('ignore', 'links', 'hotlink'), true)) $errors[] = 'Select a valid feed-media handling option.';
     $ruleErrors = array();
     feedpublisher_eligibility_rules($values['eligibility_rules'], $ruleErrors);
     foreach ($ruleErrors as $ruleError) { $errors[] = $ruleError; }
@@ -682,6 +687,7 @@ function feedpublisher_admin_save()
         'maximum_source_age_days' => $values['maximum_source_age_days'],
         'require_entry_body' => $values['require_entry_body'],
         'require_entry_media' => $values['require_entry_media'],
+        'media_mode' => $db->escape_string($values['media_mode']),
         'enabled' => $values['enabled'],
         'interval_minutes' => $values['interval_minutes'],
         'publish_interval_minutes' => $values['publish_interval_minutes'],
@@ -864,7 +870,7 @@ function feedpublisher_admin_initial_preview($values)
             $prepared = feedpublisher_prepare_item($values, $item);
             $removed = max(0, $prepared['raw_bytes'] - $prepared['cleaned_bytes']);
             $percent = $prepared['raw_bytes'] > 0 ? round(($removed / $prepared['raw_bytes']) * 100, 1) : 0;
-            $previewItem = array('source_url' => $item['url'], 'title' => $item['title'], 'content' => $prepared['content'], 'author' => isset($item['author']) ? $item['author'] : '', 'source_published' => isset($item['published']) ? $item['published'] : 0);
+            $previewItem = array('source_url' => $item['url'], 'title' => $item['title'], 'content' => $prepared['content'], 'author' => isset($item['author']) ? $item['author'] : '', 'source_published' => isset($item['published']) ? $item['published'] : 0, 'media' => isset($item['media']) ? $item['media'] : array());
             $composed = feedpublisher_compose_post($values, $previewItem);
             $exampleTitle = $composed['title'];
             $previewUser = !empty($values['uid']) ? get_user((int) $values['uid']) : array();
@@ -880,6 +886,8 @@ function feedpublisher_admin_initial_preview($values)
                 . ' bytes &middot; Removed: ' . $removed . ' bytes (' . $percent . '%)</td></tr>';
             echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">MyBB thread prefix</th><td style="padding:6px;border-bottom:1px solid #ddd">'
                 . htmlspecialchars_uni($nativePrefixLabel) . '</td></tr>';
+            echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Feed media</th><td style="padding:6px;border-bottom:1px solid #ddd">'
+                . feedpublisher_admin_media_preview(isset($item['media']) ? $item['media'] : array(), $values['media_mode']) . '</td></tr>';
             if ($importState !== 'New') {
                 echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Existing state</th><td style="padding:6px;border-bottom:1px solid #ddd">' . $importState . '</td></tr>';
             }
@@ -912,6 +920,22 @@ function feedpublisher_admin_initial_preview($values)
     echo '<a class="button" href="' . $addUrl . '">+ Add feed</a>'
         . '<a class="button" href="' . $listUrl . '">View all feeds</a></div>';
     $page->output_footer();
+}
+
+function feedpublisher_admin_media_preview($media, $mode)
+{
+    if (!$media) return 'No enclosure or Media RSS items discovered.';
+    $rows = array();
+    foreach (array_slice($media, 0, 10) as $entry) {
+        $kind = isset($entry['kind']) ? $entry['kind'] : 'file';
+        $source = isset($entry['source']) ? $entry['source'] : 'feed media';
+        $type = !empty($entry['type']) ? $entry['type'] : 'type not supplied';
+        $treatment = $mode === 'ignore' ? 'ignored'
+            : (($mode === 'hotlink' && $kind === 'image') ? 'MyBB image hotlink' : 'ordinary MyBB link');
+        $rows[] = htmlspecialchars_uni($source . ' / ' . $kind . ' / ' . $type . ' / ' . $treatment)
+            . '<br><small>' . htmlspecialchars_uni($entry['url']) . '</small>';
+    }
+    return implode('<br>', $rows);
 }
 
 function feedpublisher_admin_preview_saved()
