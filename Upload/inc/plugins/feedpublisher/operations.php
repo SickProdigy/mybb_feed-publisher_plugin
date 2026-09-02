@@ -8,20 +8,27 @@
 if (!defined('IN_MYBB')) {
     die('Direct access is not allowed.');
 }
+require_once __DIR__ . '/fulltext.php';
 
 function feedpublisher_discover_feed($feed)
 {
     global $db;
 
-    $totals = array('staged' => 0, 'skipped' => 0, 'rejected' => 0, 'existing' => 0, 'full' => 0);
+    $totals = array('staged' => 0, 'skipped' => 0, 'rejected' => 0, 'existing' => 0, 'full' => 0, 'deferred' => 0);
     try {
         $fetchMetadata = array();
         $xml = feedpublisher_fetch($feed['url'], 2097152, $fetchMetadata);
         $items = feedpublisher_parse($xml, $fetchMetadata);
         $initializing = empty($feed['initialized_at']);
         $plan = feedpublisher_eligibility_stage_plan($feed, $items, $initializing);
+        $plan = feedpublisher_fulltext_prepare_plan($feed, $plan);
         $initialComplete = true;
         foreach ($plan as $entry) {
+            if ($entry['state'] === 'deferred_fulltext') {
+                ++$totals['deferred'];
+                $initialComplete = false;
+                continue;
+            }
             $result = feedpublisher_queue_stage($feed, $entry['item'], $entry['state']);
             if (in_array($result, array('queued', 'pending_approval'), true)) {
                 ++$totals['staged'];
@@ -46,7 +53,7 @@ function feedpublisher_discover_feed($feed)
             $update['initialized_at'] = TIME_NOW;
         }
         $db->update_query('feedpublisher_feeds', $update, 'id=' . (int) $feed['id']);
-        feedpublisher_log_event((int) $feed['id'], 'discovery', 'info', 'Discovery succeeded; parsed ' . count($items) . ' entries and staged ' . $totals['staged'] . '.');
+        feedpublisher_log_event((int) $feed['id'], 'discovery', 'info', 'Discovery succeeded; parsed ' . count($items) . ' entries, staged ' . $totals['staged'] . ', and deferred ' . $totals['deferred'] . ' for bounded full-text retrieval.');
         return $totals;
     } catch (Throwable $exception) {
         $failures = min(10, (int) $feed['fetch_failures'] + 1);

@@ -62,7 +62,8 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
     }
 
     $feedId = (int) $feed['id'];
-    $identity = feedpublisher_derive_item_identity($feed, $item);
+    $identity = isset($item['_identity_override']) && is_array($item['_identity_override'])
+        ? $item['_identity_override'] : feedpublisher_derive_item_identity($feed, $item);
     if ($identity['key'] === '') {
         return 'rejected';
     }

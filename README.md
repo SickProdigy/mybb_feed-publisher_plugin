@@ -126,6 +126,18 @@ states is explicitly selected. Queue/history records and operational logs are
 not exported, and no credential, cookie, token, or secret fields are defined or
 included.
 
+Optional linked full-article retrieval can replace short feed summaries with the
+main content from the entry's public article URL. It is disabled by default and
+can run only below a configurable feed-text threshold or for every new entry.
+Article requests reuse Feed Publisher's DNS pinning, private-address blocking,
+TLS verification, no-redirect policy, 15-second timeout, HTML MIME validation,
+and 2 MiB response limit. Extraction is deterministic and dependency-free: DOM
+removes executable/navigation elements, scores explicit article/main containers,
+requires substantial content, resolves relative links, and then sends the result
+through the normal cleanup and MyCode pipeline. Failures can retain feed content,
+mark the entry seen, or fail discovery for retry. A 1-10 request-per-run bound
+defers overflow without losing it, and dry run reports the exact content source.
+
 Thread dates can use the time Feed Publisher posts to MyBB or a valid source
 publication time. Future-dated entries can be held, published using the current
 time, marked as seen, or permanently rejected. Source dates before 1980 or more

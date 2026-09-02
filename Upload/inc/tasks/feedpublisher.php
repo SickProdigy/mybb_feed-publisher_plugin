@@ -21,7 +21,7 @@ function task_feedpublisher($task)
         require_once $publisherFile;
     }
 
-    $totals = array('feeds' => 0, 'staged' => 0, 'skipped' => 0, 'rejected' => 0, 'existing' => 0, 'full' => 0, 'published' => 0, 'failed' => 0);
+    $totals = array('feeds' => 0, 'staged' => 0, 'skipped' => 0, 'rejected' => 0, 'existing' => 0, 'full' => 0, 'deferred' => 0, 'published' => 0, 'failed' => 0);
     $errors = array();
     $query = $db->simple_select('feedpublisher_feeds', '*', 'enabled=1', array('order_by' => 'id'));
     while ($feed = $db->fetch_array($query)) {
@@ -55,7 +55,7 @@ function task_feedpublisher($task)
     }
 
     $message = 'Checked ' . $totals['feeds'] . ' enabled feeds; staged ' . $totals['staged']
-        . ', initially skipped ' . $totals['skipped'] . ', rejected ' . $totals['rejected'] . ', already known ' . $totals['existing'] . ', queue-full skips ' . $totals['full']
+        . ', initially skipped ' . $totals['skipped'] . ', rejected ' . $totals['rejected'] . ', already known ' . $totals['existing'] . ', queue-full skips ' . $totals['full'] . ', full-text deferred ' . $totals['deferred']
         . ', published ' . $totals['published'] . ', publication failures ' . $totals['failed'] . '.';
     if ($errors) {
         $message .= ' Errors: ' . implode('; ', $errors);

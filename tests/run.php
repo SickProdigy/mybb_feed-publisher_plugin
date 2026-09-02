@@ -30,6 +30,7 @@ if (!function_exists('is_member')) {
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/core.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php';
+require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/fulltext.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/portability.php';
 
 class FeedPublisherTestSuite
@@ -333,6 +334,44 @@ $suite->test('portability validates targets and normalizes imported configuratio
     $t->assertSame(5, $record['interval_minutes']);
     $t->assertSame(0, $record['enabled']);
     $t->assertSame(0, $record['thread_prefix_id']);
+});
+
+$suite->test('full-text planning applies fallback and defers beyond the request bound', function ($t) {
+    $feed = array('id' => 0, 'identity_strategy' => 'guid_link', 'fulltext_mode' => 'always',
+        'fulltext_fallback' => 'feed', 'fulltext_summary_chars' => 600, 'fulltext_max_per_run' => 1);
+    $plan = array(
+        array('state' => 'queued', 'item' => array('key' => 'one', 'title' => 'One', 'url' => 'javascript:bad', 'content' => 'Summary')),
+        array('state' => 'queued', 'item' => array('key' => 'two', 'title' => 'Two', 'url' => 'https://example.com/two', 'content' => 'Summary')),
+    );
+    $result = feedpublisher_fulltext_prepare_plan($feed, $plan);
+    $t->assertSame('fallback', $result[0]['item']['_fulltext']['status']);
+    $t->assertSame('queued', $result[0]['state']);
+    $t->assertSame('deferred_fulltext', $result[1]['state']);
+    $t->assertSame('deferred', $result[1]['item']['_fulltext']['status']);
+    $t->assertSame(feedpublisher_derive_item_identity($feed, $plan[0]['item'])['key'], $result[0]['item']['_identity_override']['key']);
+    $feed['fulltext_fallback'] = 'skip';
+    $skipped = feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
+    $t->assertSame('skipped', $skipped[0]['state']);
+    $feed['fulltext_fallback'] = 'retry';
+    $t->expectException('FeedPublisherException', function () use ($feed, $plan) {
+        feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
+    });
+});
+
+$suite->test('full-text extraction selects article content and resolves safe relative links', function ($t) {
+    if (!extension_loaded('dom')) { $t->skip('PHP DOM is not installed.'); }
+    $html = '<html><body><header>Navigation</header><article class="post-content"><h1>Story</h1>'
+        . '<p>This is a substantial first paragraph containing enough useful article words for deterministic extraction and testing.</p>'
+        . '<p>This second paragraph adds more meaningful article content and includes <a href="../source">a source link</a>.</p>'
+        . '<script>alert(1)</script></article><aside>Related links</aside></body></html>';
+    $metadata = array();
+    $article = feedpublisher_fulltext_extract($html, 'https://example.com/news/story/page.html', $metadata);
+    $t->assertContains('substantial first paragraph', $article);
+    $t->assertContains('https://example.com/news/source', $article);
+    $t->assertNotContains('alert(1)', $article);
+    $t->assertTrue($metadata['text_characters'] >= 200);
+    $latin = "<p>Caf\xE9 article</p>";
+    $t->assertContains('Caf' . "\xC3\xA9", feedpublisher_fulltext_normalize_encoding($latin, 'ISO-8859-1'));
 });
 
 $suite->test('future-date policies and dateline fallback', function ($t) {

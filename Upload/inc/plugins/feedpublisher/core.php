@@ -57,7 +57,7 @@ function feedpublisher_log_event($feedId, $stage, $severity, $message)
 {
     global $db;
     if (!$db->table_exists('feedpublisher_logs')) { return; }
-    $stage = in_array($stage, array('task', 'fetch', 'content-type', 'parse', 'discovery', 'publication', 'cleanup', 'general'), true) ? $stage : 'general';
+    $stage = in_array($stage, array('task', 'fetch', 'content-type', 'parse', 'fulltext', 'discovery', 'publication', 'cleanup', 'general'), true) ? $stage : 'general';
     $severity = in_array($severity, array('info', 'warning', 'error'), true) ? $severity : 'info';
     $db->insert_query('feedpublisher_logs', array('feed_id' => max(0, (int) $feedId), 'created_at' => TIME_NOW,
         'stage' => $db->escape_string($stage), 'severity' => $db->escape_string($severity),
@@ -197,10 +197,10 @@ function feedpublisher_fetch_resource($url, $maxBytes, $accept, &$metadata = nul
         throw new FeedPublisherException('fetch', 'The remote response exceeded the configured size limit.');
     }
     if ($status >= 300 && $status < 400) {
-        throw new FeedPublisherException('fetch', 'Feed redirects are not allowed.');
+        throw new FeedPublisherException('fetch', 'Remote redirects are not allowed.');
     }
     if ($ok === false || $status < 200 || $status >= 300) {
-        throw new FeedPublisherException('fetch', 'The feed request failed' . ($error ? ': ' . $error : ' with HTTP ' . $status) . '.');
+        throw new FeedPublisherException('fetch', 'The remote request failed' . ($error ? ': ' . $error : ' with HTTP ' . $status) . '.');
     }
     return $body;
 }
@@ -566,9 +566,11 @@ function feedpublisher_resolve_relative_content_url($url, $base)
     if ($relativePath === '') {
         $path = isset($baseParts['path']) ? $baseParts['path'] : '/';
     } else {
+        $basePath = isset($baseParts['path']) ? $baseParts['path'] : '/';
+        $baseDirectory = substr($basePath, -1) === '/' ? rtrim($basePath, '/') : dirname($basePath);
         $path = isset($relativePath[0]) && $relativePath[0] === '/'
             ? $relativePath
-            : rtrim(dirname(isset($baseParts['path']) ? $baseParts['path'] : '/'), '/') . '/' . $relativePath;
+            : rtrim($baseDirectory, '/') . '/' . $relativePath;
     }
     $segments = array();
     foreach (explode('/', $path) as $segment) {
@@ -577,6 +579,9 @@ function feedpublisher_resolve_relative_content_url($url, $base)
         $segments[] = $segment;
     }
     $resolved = $origin . '/' . implode('/', $segments);
+    if ($relativePath !== '' && substr($relativePath, -1) === '/' && substr($resolved, -1) !== '/') {
+        $resolved .= '/';
+    }
     if (array_key_exists('query', $parts)) {
         $resolved .= '?' . $parts['query'];
     } elseif ($relativePath === '' && isset($baseParts['query'])) {

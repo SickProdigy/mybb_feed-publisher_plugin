@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.1.27 - 2026-09-02
+
+- Add opt-in summary-only or always-on linked-article retrieval with explicit
+  feed-content, mark-seen, or fail-and-retry fallback behavior.
+- Reuse DNS pinning, public-address validation, TLS verification, redirect
+  rejection, 15-second timeouts, strict HTML MIME checks, and 2 MiB limits.
+- Add deterministic DOM-based article extraction with 20,000-node and
+  200-character substance limits, unsafe-element removal, and resolved links.
+- Bound article requests to 1-10 new entries per discovery run, defer overflow
+  safely, skip already-known identities, and show exact content source in dry run.
+- Normalize linked-page HTTP/meta charsets to UTF-8 and correct directory-style
+  HTML base and XML xml:base resolution for extracted and feed-relative links.
+
 ## 0.1.26 - 2026-09-02
 
 - Add standards-compatible OPML export for feed names, URLs, and enabled-state

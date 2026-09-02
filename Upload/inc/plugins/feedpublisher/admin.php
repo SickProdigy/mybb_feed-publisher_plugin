@@ -175,7 +175,7 @@ function feedpublisher_admin_diagnostics()
     $hours = max(1, min(720, $mybb->get_input('log_hours', MyBB::INPUT_INT) ?: 168));
     $conditions = array('created_at>=' . (TIME_NOW - $hours * 3600));
     if ($feedFilter) { $conditions[] = 'feed_id=' . $feedFilter; }
-    if (in_array($stage, array('task','fetch','content-type','parse','discovery','publication','cleanup','general'), true)) { $conditions[] = "stage='" . $db->escape_string($stage) . "'"; }
+    if (in_array($stage, array('task','fetch','content-type','parse','fulltext','discovery','publication','cleanup','general'), true)) { $conditions[] = "stage='" . $db->escape_string($stage) . "'"; }
     if (in_array($severity, array('info','warning','error'), true)) { $conditions[] = "severity='" . $db->escape_string($severity) . "'"; }
     echo '<form method="get" action="index.php"><input type="hidden" name="module" value="config/feedpublisher"><input type="hidden" name="action" value="diagnostics">Logs: feed <input type="number" name="log_feed" min="0" value="' . $feedFilter . '" style="width:70px"> stage <input name="log_stage" value="' . htmlspecialchars_uni($stage) . '" style="width:90px"> severity <input name="log_severity" value="' . htmlspecialchars_uni($severity) . '" style="width:80px"> hours <input type="number" name="log_hours" min="1" max="720" value="' . $hours . '" style="width:70px"> <input class="button" type="submit" value="Filter"></form>';
     $logTable = new Table; foreach (array('Time','Feed','Stage','Severity','Message') as $heading) { $logTable->construct_header($heading); }
@@ -304,6 +304,10 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'require_entry_media' => 0,
         'media_mode' => 'ignore',
         'publication_mode' => 'automatic',
+        'fulltext_mode' => 'disabled',
+        'fulltext_fallback' => 'feed',
+        'fulltext_summary_chars' => 600,
+        'fulltext_max_per_run' => 3,
         'enabled' => 0,
         'interval_minutes' => 60,
         'publish_interval_minutes' => 60,
@@ -398,6 +402,13 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         $form->generate_select_box('media_mode', array('ignore' => 'Ignore feed media (default)', 'links' => 'Add safe media links', 'hotlink' => 'Show images; link videos and files'), $values['media_mode']));
     $container->output_row('Publication mode', 'Automatic creates threads according to the normal schedule. Require approval prepares and stores new entries without publishing until an administrator approves them in Review queue.',
         $form->generate_select_box('publication_mode', array('automatic' => 'Publish automatically', 'approval' => 'Require administrator approval'), $values['publication_mode']));
+    $container->output_row('Linked full article', 'Disabled keeps feed content. Summary-only mode visits the linked page only when the feed body is shorter than the threshold. Always attempts the linked page for every new publishable entry. Requests use the same public-address, DNS pinning, TLS, redirect, timeout, MIME, and 2 MiB limits as feed fetching.',
+        $form->generate_select_box('fulltext_mode', array('disabled' => 'Disabled (use feed content)', 'summary' => 'Retrieve when feed content is short', 'always' => 'Always retrieve linked article'), $values['fulltext_mode']));
+    $container->output_row('Full-article limits', 'Threshold counts plain feed-text characters. At most 1 to 10 new article pages are fetched per discovery run; remaining entries wait for a later run.',
+        'Summary threshold: ' . $form->generate_numeric_field('fulltext_summary_chars', (int) $values['fulltext_summary_chars'], array('min' => 100, 'max' => 5000))
+        . ' &nbsp; Article fetches per run: ' . $form->generate_numeric_field('fulltext_max_per_run', (int) $values['fulltext_max_per_run'], array('min' => 1, 'max' => 10)));
+    $container->output_row('Full-article failure', 'Choose what happens when the linked page cannot be safely fetched or no substantial article container can be extracted.',
+        $form->generate_select_box('fulltext_fallback', array('feed' => 'Use the original feed content', 'skip' => 'Mark this entry seen; do not publish', 'retry' => 'Fail discovery and retry later'), $values['fulltext_fallback']));
     if (!empty($values['id'])) {
         $container->output_row('Eligibility rule changes', 'Changing eligibility requires explicit re-evaluation. This removes only prior filter-rejection history so currently visible entries can be evaluated again.',
             $form->generate_check_box('reset_filter_history', 1, 'Confirm filter change and re-evaluate previously filtered entries.'));
@@ -517,6 +528,10 @@ function feedpublisher_admin_save()
         'require_entry_media' => $mybb->get_input('require_entry_media', MyBB::INPUT_INT) ? 1 : 0,
         'media_mode' => $mybb->get_input('media_mode'),
         'publication_mode' => $mybb->get_input('publication_mode'),
+        'fulltext_mode' => $mybb->get_input('fulltext_mode'),
+        'fulltext_fallback' => $mybb->get_input('fulltext_fallback'),
+        'fulltext_summary_chars' => $mybb->get_input('fulltext_summary_chars', MyBB::INPUT_INT),
+        'fulltext_max_per_run' => $mybb->get_input('fulltext_max_per_run', MyBB::INPUT_INT),
         'reset_filter_history' => $mybb->get_input('reset_filter_history', MyBB::INPUT_INT) ? 1 : 0,
         'interval_minutes' => $mybb->get_input('interval_minutes', MyBB::INPUT_INT),
         'publish_interval_minutes' => $mybb->get_input('publish_interval_minutes', MyBB::INPUT_INT),
@@ -619,6 +634,10 @@ function feedpublisher_admin_save()
     }
     if (!in_array($values['media_mode'], array('ignore', 'links', 'hotlink'), true)) $errors[] = 'Select a valid feed-media handling option.';
     if (!in_array($values['publication_mode'], array('automatic', 'approval'), true)) $errors[] = 'Select a valid publication mode.';
+    if (!in_array($values['fulltext_mode'], array('disabled', 'summary', 'always'), true)) $errors[] = 'Select a valid linked full-article mode.';
+    if (!in_array($values['fulltext_fallback'], array('feed', 'skip', 'retry'), true)) $errors[] = 'Select a valid full-article failure action.';
+    if ($values['fulltext_summary_chars'] < 100 || $values['fulltext_summary_chars'] > 5000) $errors[] = 'Full-article summary threshold must be between 100 and 5000 characters.';
+    if ($values['fulltext_max_per_run'] < 1 || $values['fulltext_max_per_run'] > 10) $errors[] = 'Full-article fetches per run must be between 1 and 10.';
     $ruleErrors = array();
     feedpublisher_eligibility_rules($values['eligibility_rules'], $ruleErrors);
     foreach ($ruleErrors as $ruleError) { $errors[] = $ruleError; }
@@ -719,6 +738,10 @@ function feedpublisher_admin_save()
         'require_entry_media' => $values['require_entry_media'],
         'media_mode' => $db->escape_string($values['media_mode']),
         'publication_mode' => $db->escape_string($values['publication_mode']),
+        'fulltext_mode' => $db->escape_string($values['fulltext_mode']),
+        'fulltext_fallback' => $db->escape_string($values['fulltext_fallback']),
+        'fulltext_summary_chars' => $values['fulltext_summary_chars'],
+        'fulltext_max_per_run' => $values['fulltext_max_per_run'],
         'enabled' => $values['enabled'],
         'interval_minutes' => $values['interval_minutes'],
         'publish_interval_minutes' => $values['publish_interval_minutes'],
@@ -812,6 +835,7 @@ function feedpublisher_admin_initial_preview($values)
         $xml = feedpublisher_fetch($values['url'], 2097152, $fetchMetadata);
         $items = feedpublisher_parse($xml, $fetchMetadata, $parseMetadata);
         $plan = feedpublisher_eligibility_stage_plan($values, $items, empty($values['initialized_at']));
+        $plan = feedpublisher_fulltext_prepare_plan($values, $plan);
     } catch (Throwable $exception) {
         feedpublisher_admin_form($values['id'] ? 'edit' : 'add', $values, array(
             'Preview failed: ' . htmlspecialchars_uni($exception->getMessage()),
@@ -859,6 +883,10 @@ function feedpublisher_admin_initial_preview($values)
             $action = empty($entry['eligibility']['eligible'])
                 ? 'Reject permanently: ' . $entry['eligibility']['reason']
                 : 'Reject permanently; do not publish';
+        } elseif ($entry['state'] === 'deferred_fulltext') {
+            $action = 'Wait for a later discovery run; full-article fetch limit reached';
+        } elseif ($entry['state'] === 'skipped' && isset($item['_fulltext']['status']) && $item['_fulltext']['status'] === 'fallback') {
+            $action = 'Mark as seen; full-article extraction failed and fallback is skip';
         } elseif ($willPublish && isset($values['publication_mode']) && $values['publication_mode'] === 'approval') {
             $action = $datePlan['available_at'] > TIME_NOW ? 'Hold until scheduled time, then require administrator approval' : 'Require administrator approval before paced publishing';
         } elseif ($willPublish && $datePlan['available_at'] > TIME_NOW) {
@@ -870,7 +898,8 @@ function feedpublisher_admin_initial_preview($values)
         }
         $statusIcon = $willPublish ? '&#x1F7E2;' : '&#x1F534;';
         $panelClass = $willPublish ? 'fp-preview-publish' : 'fp-preview-skip';
-        $identity = feedpublisher_derive_item_identity($values, $item);
+        $identity = isset($item['_identity_override']) && is_array($item['_identity_override'])
+            ? $item['_identity_override'] : feedpublisher_derive_item_identity($values, $item);
         $itemKey = $identity['key'];
         $condition = 'feed_id=' . (int) $values['id'] . " AND item_key='" . $db->escape_string($itemKey) . "'";
         $imported = $values['id'] ? $db->fetch_array($db->simple_select('feedpublisher_items', 'tid,pid,imported_at,disposition', $condition, array('limit' => 1))) : null;
@@ -917,6 +946,11 @@ function feedpublisher_admin_initial_preview($values)
             echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">HTML cleanup</th><td style="padding:6px;border-bottom:1px solid #ddd">Source: '
                 . $prepared['raw_bytes'] . ' bytes &middot; Cleaned: ' . $prepared['cleaned_bytes']
                 . ' bytes &middot; Removed: ' . $removed . ' bytes (' . $percent . '%)</td></tr>';
+            $fulltext = isset($item['_fulltext']) ? $item['_fulltext'] : array('source' => 'feed', 'status' => 'disabled', 'message' => 'Feed content used.');
+            $contentSource = $fulltext['source'] === 'fulltext' ? 'Extracted linked article' : 'Original feed content';
+            if (!empty($fulltext['extract']['text_characters'])) $contentSource .= ' (' . (int) $fulltext['extract']['text_characters'] . ' extracted text characters)';
+            echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Content source</th><td style="padding:6px;border-bottom:1px solid #ddd">'
+                . htmlspecialchars_uni($contentSource . ' - ' . $fulltext['message']) . '</td></tr>';
             echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">MyBB thread prefix</th><td style="padding:6px;border-bottom:1px solid #ddd">'
                 . htmlspecialchars_uni($nativePrefixLabel) . '</td></tr>';
             echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Feed media</th><td style="padding:6px;border-bottom:1px solid #ddd">'

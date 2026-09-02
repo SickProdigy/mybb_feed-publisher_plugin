@@ -15,6 +15,7 @@ function feedpublisher_portability_config_fields()
         'identity_strategy','terminal_retention_days','terminal_retention_count','dedupe_retention_days',
         'strict_reconciliation','eligibility_rules','minimum_source_age_hours','maximum_source_age_days',
         'require_entry_body','require_entry_media','media_mode','publication_mode','enabled','interval_minutes',
+        'fulltext_mode','fulltext_fallback','fulltext_summary_chars','fulltext_max_per_run',
         'publish_interval_minutes','max_posts_per_run','queue_order','publishing_paused','initial_policy',
         'initial_limit','attribution_mode','post_header','post_footer','body_length_limit','continuation_mode',
         'continuation_text','remove_bylines','remove_source_links','strip_selectors','strip_regexes');
@@ -39,6 +40,7 @@ function feedpublisher_portability_settings_supported($entry)
     $enums = array('thread_date_mode' => array('publish','source'), 'future_date_policy' => array('hold','clamp','skip','reject'),
         'identity_strategy' => array('guid_link','title','content','title_content'), 'media_mode' => array('ignore','links','hotlink'),
         'publication_mode' => array('automatic','approval'), 'queue_order' => array('oldest','newest'),
+        'fulltext_mode' => array('disabled','summary','always'), 'fulltext_fallback' => array('feed','skip','retry'),
         'initial_policy' => array('all','latest','recent','start_now'), 'attribution_mode' => array('link','title_link','none'),
         'continuation_mode' => array('none','source_link'));
     foreach ($enums as $field => $allowed) if (isset($entry[$field]) && !in_array($entry[$field], $allowed, true)) $errors[] = $field;
@@ -247,6 +249,7 @@ function feedpublisher_portability_defaults($entry, $fid, $uid, $preserveEnabled
         'dedupe_retention_days' => 0, 'strict_reconciliation' => 0, 'eligibility_rules' => '',
         'minimum_source_age_hours' => 0, 'maximum_source_age_days' => 0, 'require_entry_body' => 0,
         'require_entry_media' => 0, 'media_mode' => 'ignore', 'publication_mode' => 'automatic', 'enabled' => 0,
+        'fulltext_mode' => 'disabled', 'fulltext_fallback' => 'feed', 'fulltext_summary_chars' => 600, 'fulltext_max_per_run' => 3,
         'interval_minutes' => 60, 'publish_interval_minutes' => 60, 'max_posts_per_run' => 1, 'queue_order' => 'oldest',
         'publishing_paused' => 0, 'initial_policy' => 'latest', 'initial_limit' => 1, 'attribution_mode' => 'link',
         'post_header' => '', 'post_footer' => '', 'body_length_limit' => 0, 'continuation_mode' => 'none',
@@ -262,6 +265,7 @@ function feedpublisher_portability_defaults($entry, $fid, $uid, $preserveEnabled
     $enums = array('thread_date_mode' => array('publish','source'), 'future_date_policy' => array('hold','clamp','skip','reject'),
         'identity_strategy' => array('guid_link','title','content','title_content'), 'media_mode' => array('ignore','links','hotlink'),
         'publication_mode' => array('automatic','approval'), 'queue_order' => array('oldest','newest'),
+        'fulltext_mode' => array('disabled','summary','always'), 'fulltext_fallback' => array('feed','skip','retry'),
         'initial_policy' => array('all','latest','recent','start_now'), 'attribution_mode' => array('link','title_link','none'),
         'continuation_mode' => array('none','source_link'));
     foreach ($enums as $field => $allowed) if (!in_array($defaults[$field], $allowed, true)) $defaults[$field] = $allowed[0];
@@ -270,6 +274,8 @@ function feedpublisher_portability_defaults($entry, $fid, $uid, $preserveEnabled
         'minimum_source_age_hours' => array(0,8760), 'maximum_source_age_days' => array(0,3650),
         'interval_minutes' => array(5,10080), 'publish_interval_minutes' => array(5,10080),
         'max_posts_per_run' => array(1,25), 'initial_limit' => array(1,100), 'body_length_limit' => array(0,100000));
+    $bounds['fulltext_summary_chars'] = array(100,5000);
+    $bounds['fulltext_max_per_run'] = array(1,10);
     foreach ($bounds as $field => $range) $defaults[$field] = max($range[0], min($range[1], (int) $defaults[$field]));
     $defaults['title_prefix'] = my_substr(trim((string) $defaults['title_prefix']), 0, 40);
     $defaults['continuation_text'] = my_substr(trim((string) $defaults['continuation_text']), 0, 100);
