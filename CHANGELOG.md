@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.28 - 2026-09-02
+
+- Complete issue #24 configuration restore by matching every feed's exported
+  forum name and posting username to safe local IDs during preview and import.
+- Add optional global forum/user fallbacks for OPML, renamed, missing, or
+  ambiguous saved targets instead of forcing one mapping onto the entire backup.
+- Validate each resolved user against its resolved destination before importing,
+  and report feeds skipped because no safe mapping was available.
+
 ## 0.1.27 - 2026-09-02
 
 - Add opt-in summary-only or always-on linked-article retrieval with explicit

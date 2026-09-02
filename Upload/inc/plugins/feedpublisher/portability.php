@@ -191,6 +191,37 @@ function feedpublisher_portability_mapping_options()
     return array($forums, $users);
 }
 
+function feedpublisher_portability_name_index($options)
+{
+    $index = array();
+    foreach ($options as $id => $name) {
+        if (!(int) $id) continue;
+        $key = strtolower(trim((string) $name));
+        if ($key === '') continue;
+        $index[$key] = isset($index[$key]) ? 0 : (int) $id;
+    }
+    return $index;
+}
+
+function feedpublisher_portability_resolve_mapping($entry, $forums, $users, $fallbackFid = 0, $fallbackUid = 0, $useSaved = true)
+{
+    $fid = 0; $uid = 0; $forumName = trim((string) ($entry['destination_forum'] ?? ''));
+    $username = trim((string) ($entry['posting_username'] ?? ''));
+    if ($useSaved) {
+        $forumIndex = feedpublisher_portability_name_index($forums);
+        $userIndex = feedpublisher_portability_name_index($users);
+        $fid = isset($forumIndex[strtolower($forumName)]) ? $forumIndex[strtolower($forumName)] : 0;
+        $uid = isset($userIndex[strtolower($username)]) ? $userIndex[strtolower($username)] : 0;
+    }
+    return array(
+        'fid' => $fid ?: (int) $fallbackFid,
+        'uid' => $uid ?: (int) $fallbackUid,
+        'forum_saved' => $fid > 0,
+        'user_saved' => $uid > 0,
+        'complete' => ($fid ?: (int) $fallbackFid) > 0 && ($uid ?: (int) $fallbackUid) > 0,
+    );
+}
+
 function feedpublisher_portability_preview()
 {
     global $mybb, $page;
@@ -212,7 +243,7 @@ function feedpublisher_portability_preview()
     echo '<p><strong>Format:</strong> ' . ($parsed['type'] === 'opml' ? 'OPML feed list' : 'Feed Publisher configuration')
         . '. This preview made no configuration changes and performed no network requests.</p>';
     $table = new Table;
-    foreach (array('Feed', 'URL', 'Original mapping', 'Result') as $heading) $table->construct_header($heading);
+    foreach (array('Feed', 'URL', 'Saved mapping', 'Restore mapping', 'Result') as $heading) $table->construct_header($heading);
     $new = 0;
     foreach ($rows as $row) {
         if ($row['status'] === 'new') ++$new;
@@ -222,18 +253,25 @@ function feedpublisher_portability_preview()
                 . '<br>User: ' . htmlspecialchars_uni(isset($entry['posting_username']) ? $entry['posting_username'] : 'unknown')
                 . '<br>Native prefix: ' . (!empty($entry['source_thread_prefix_id']) ? '#' . (int) $entry['source_thread_prefix_id'] . ' (reset on import)' : 'none')
             : 'Not included in OPML';
+        $resolved = feedpublisher_portability_resolve_mapping($entry, $forums, $users);
+        $restore = $parsed['type'] === 'config'
+            ? 'Forum: ' . ($resolved['forum_saved'] ? htmlspecialchars_uni($forums[$resolved['fid']]) . ' (matched)' : 'needs fallback')
+                . '<br>User: ' . ($resolved['user_saved'] ? htmlspecialchars_uni($users[$resolved['uid']]) . ' (matched)' : 'needs fallback')
+            : 'Uses fallback targets';
         $table->construct_cell(htmlspecialchars_uni($row['name'] ?: '(missing name)'));
         $table->construct_cell(htmlspecialchars_uni($row['url'] ?: '(missing URL)'));
         $table->construct_cell($mapping);
+        $table->construct_cell($restore);
         $table->construct_cell(htmlspecialchars_uni($row['status']));
         $table->construct_row();
     }
-    if (!$rows) { $table->construct_cell('No feed entries were found.', array('colspan' => 4)); $table->construct_row(); }
+    if (!$rows) { $table->construct_cell('No feed entries were found.', array('colspan' => 5)); $table->construct_row(); }
     $table->output('Import entries');
     echo $form->generate_hidden_field('import_payload', base64_encode($content));
-    echo '<fieldset><legend>Required target mapping</legend><p>Imported forum and user IDs are never trusted. Choose valid targets on this MyBB installation for every new feed.</p>'
-        . '<p>Destination forum: ' . $form->generate_select_box('fid', $forums, 0) . '</p>'
-        . '<p>Posting user: ' . $form->generate_select_box('uid', $users, 0) . '</p>'
+    echo '<fieldset><legend>Restore target mapping</legend><p>Full backups match each saved forum name and username against this installation. IDs are never trusted. Fallbacks are used for OPML and for any name that is missing, renamed, or ambiguous.</p>'
+        . '<p>' . $form->generate_check_box('restore_saved_mapping', 1, 'Restore each feed\'s saved forum and posting user when both names match.', array('checked' => true)) . '</p>'
+        . '<p>Fallback forum: ' . $form->generate_select_box('fid', $forums, 0) . '</p>'
+        . '<p>Fallback posting user: ' . $form->generate_select_box('uid', $users, 0) . '</p>'
         . '<p>' . $form->generate_check_box('preserve_enabled', 1, 'Preserve exported enabled states (otherwise every imported feed starts disabled).') . '</p></fieldset>';
     echo '<p><strong>' . $new . '</strong> new feed(s) can be imported. Existing, repeated, and invalid entries will be skipped.</p>';
     $form->output_submit_wrapper(array($form->generate_submit_button('Import new feeds')));
@@ -298,14 +336,6 @@ function feedpublisher_portability_apply()
     }
     $fid = $mybb->get_input('fid', MyBB::INPUT_INT);
     $uid = $mybb->get_input('uid', MyBB::INPUT_INT);
-    $forum = $db->fetch_array($db->simple_select('forums', 'fid,type,active,linkto', 'fid=' . $fid, array('limit' => 1)));
-    $user = $db->fetch_array($db->simple_select('users', 'uid', 'uid=' . $uid, array('limit' => 1)));
-    $permissions = $user ? forum_permissions($fid, $uid) : array();
-    if (!$forum || $forum['type'] !== 'f' || empty($forum['active']) || !empty($forum['linkto']) || !$user
-        || empty($permissions['canview']) || empty($permissions['canpostthreads'])) {
-        flash_message('Select an active posting forum and a user who can view it and create threads.', 'error');
-        admin_redirect('index.php?module=config/feedpublisher&action=tools');
-    }
     try {
         $parsed = feedpublisher_portability_parse($payload);
         $rows = feedpublisher_portability_classify($parsed);
@@ -313,15 +343,24 @@ function feedpublisher_portability_apply()
         flash_message(htmlspecialchars_uni($exception->getMessage()), 'error');
         admin_redirect('index.php?module=config/feedpublisher&action=tools');
     }
-    $inserted = 0; $skipped = 0;
+    list($forums, $users) = feedpublisher_portability_mapping_options();
+    $useSaved = $parsed['type'] === 'config' && $mybb->get_input('restore_saved_mapping', MyBB::INPUT_INT);
+    $inserted = 0; $skipped = 0; $unmapped = 0;
     foreach ($rows as $row) {
         if ($row['status'] !== 'new') { ++$skipped; continue; }
-        $record = feedpublisher_portability_defaults($row['entry'], $fid, $uid, $mybb->get_input('preserve_enabled', MyBB::INPUT_INT));
+        $mapping = feedpublisher_portability_resolve_mapping($row['entry'], $forums, $users, $fid, $uid, $useSaved);
+        if (!$mapping['complete']) { ++$unmapped; continue; }
+        $forum = $db->fetch_array($db->simple_select('forums', 'fid,type,active,linkto', 'fid=' . $mapping['fid'], array('limit' => 1)));
+        $user = $db->fetch_array($db->simple_select('users', 'uid', 'uid=' . $mapping['uid'], array('limit' => 1)));
+        $permissions = $user ? forum_permissions($mapping['fid'], $mapping['uid']) : array();
+        if (!$forum || $forum['type'] !== 'f' || empty($forum['active']) || !empty($forum['linkto']) || !$user
+            || empty($permissions['canview']) || empty($permissions['canpostthreads'])) { ++$unmapped; continue; }
+        $record = feedpublisher_portability_defaults($row['entry'], $mapping['fid'], $mapping['uid'], $mybb->get_input('preserve_enabled', MyBB::INPUT_INT));
         foreach ($record as $field => $value) if (!is_int($value)) $record[$field] = $db->escape_string($value);
         $db->insert_query('feedpublisher_feeds', $record);
         ++$inserted;
     }
-    log_admin_action('Feed Publisher import', $parsed['type'], $inserted, $skipped);
-    flash_message('Imported ' . $inserted . ' new feed(s); skipped ' . $skipped . ' existing, repeated, or invalid entries. No feed URLs were fetched.', 'success');
+    log_admin_action('Feed Publisher import', $parsed['type'], $inserted, $skipped, $unmapped);
+    flash_message('Imported ' . $inserted . ' new feed(s); skipped ' . $skipped . ' existing, repeated, or invalid entries and ' . $unmapped . ' without a valid forum/user mapping. No feed URLs were fetched.', 'success');
     admin_redirect('index.php?module=config/feedpublisher&action=tools');
 }

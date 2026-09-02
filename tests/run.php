@@ -334,6 +334,18 @@ $suite->test('portability validates targets and normalizes imported configuratio
     $t->assertSame(5, $record['interval_minutes']);
     $t->assertSame(0, $record['enabled']);
     $t->assertSame(0, $record['thread_prefix_id']);
+    $mapping = feedpublisher_portability_resolve_mapping(
+        array('destination_forum' => 'Gaming News', 'posting_username' => 'FeedBot'),
+        array(0 => 'Fallback', 5 => 'Gaming News'), array(0 => 'Fallback', 9 => 'FeedBot'), 2, 3, true
+    );
+    $t->assertSame(5, $mapping['fid']);
+    $t->assertSame(9, $mapping['uid']);
+    $fallback = feedpublisher_portability_resolve_mapping(
+        array('destination_forum' => 'Renamed', 'posting_username' => 'Missing'),
+        array(0 => 'Fallback', 5 => 'Gaming News'), array(0 => 'Fallback', 9 => 'FeedBot'), 2, 3, true
+    );
+    $t->assertSame(2, $fallback['fid']);
+    $t->assertSame(3, $fallback['uid']);
 });
 
 $suite->test('full-text planning applies fallback and defers beyond the request bound', function ($t) {

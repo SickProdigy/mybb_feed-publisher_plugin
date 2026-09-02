@@ -120,11 +120,14 @@ The **Import / export** tab downloads a standards-compatible OPML feed list or a
 versioned JSON backup of Feed Publisher settings. Imports accept either format
 up to 256 KiB and 500 feeds, then show a no-write preview of new, existing,
 duplicate, invalid, and unsupported entries. Import never fetches feed URLs.
-Administrators must map imports to a valid local forum and posting user; native
-prefix IDs are reset, and feeds start disabled unless preserving exported enabled
-states is explicitly selected. Queue/history records and operational logs are
-not exported, and no credential, cookie, token, or secret fields are defined or
-included.
+Full configuration restores match each feed's saved forum name and posting
+username to safe local IDs; exported IDs are never trusted. Optional fallback
+targets cover OPML and renamed, missing, or ambiguous names. Every resolved
+forum/user pair is permission checked independently, native prefix IDs are reset,
+and unsafe or unresolved entries are skipped. Feeds start disabled unless
+preserving exported enabled states is explicitly selected. Queue/history records
+and operational logs are not exported, and no credential, cookie, token, or
+secret fields are defined or included.
 
 Optional linked full-article retrieval can replace short feed summaries with the
 main content from the entry's public article URL. It is disabled by default and
