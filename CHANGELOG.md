@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.26 - 2026-09-02
+
+- Add standards-compatible OPML export for feed names, URLs, and enabled-state
+  hints plus a versioned JSON export for MyBB-specific feed configuration.
+- Add bounded OPML/JSON import with a no-write preview classifying new, existing,
+  repeated, invalid, and unsupported entries before any records are created.
+- Require explicit destination-forum and posting-user mapping, validate posting
+  permission, reset nonportable native prefixes, and default imports to disabled.
+- Limit imports to 256 KiB and 500 feeds, reject unsafe rule/template settings,
+  avoid all network fetching during import, and log successful administrator use.
+
 ## 0.1.25 - 2026-09-02
 
 - Add automatic and administrator-approval publication modes per feed, with

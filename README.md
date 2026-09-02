@@ -116,6 +116,16 @@ approve the original, edit the prepared title/body and approve, defer review for
 24 hours, or reject it permanently. Approved entries return to normal pacing
 and publication validation; rejected identities remain recorded for deduplication.
 
+The **Import / export** tab downloads a standards-compatible OPML feed list or a
+versioned JSON backup of Feed Publisher settings. Imports accept either format
+up to 256 KiB and 500 feeds, then show a no-write preview of new, existing,
+duplicate, invalid, and unsupported entries. Import never fetches feed URLs.
+Administrators must map imports to a valid local forum and posting user; native
+prefix IDs are reset, and feeds start disabled unless preserving exported enabled
+states is explicitly selected. Queue/history records and operational logs are
+not exported, and no credential, cookie, token, or secret fields are defined or
+included.
+
 Thread dates can use the time Feed Publisher posts to MyBB or a valid source
 publication time. Future-dated entries can be held, published using the current
 time, marked as seen, or permanently rejected. Source dates before 1980 or more

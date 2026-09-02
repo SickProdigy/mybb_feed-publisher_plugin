@@ -5,6 +5,7 @@
  */
 
 define('IN_MYBB', 1);
+define('IN_ADMINCP', 1);
 define('TIME_NOW', 1700000000);
 define('TABLE_PREFIX', 'mybb_');
 
@@ -29,6 +30,7 @@ if (!function_exists('is_member')) {
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/core.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php';
+require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/portability.php';
 
 class FeedPublisherTestSuite
 {
@@ -316,6 +318,21 @@ $suite->test('media composition hotlinks only images and safely links other medi
     $links = feedpublisher_compose_media($media, 'links');
     $t->assertContains('[url=https://example.com/image.jpg]View image[/url]', $links);
     $t->assertSame('', feedpublisher_compose_media($media, 'ignore'));
+});
+
+$suite->test('portability validates targets and normalizes imported configuration', function ($t) {
+    $t->assertSame(true, feedpublisher_portability_url_valid('https://example.com/feed.xml'));
+    $t->assertSame(false, feedpublisher_portability_url_valid('http://127.0.0.1/feed'));
+    $t->assertSame(false, feedpublisher_portability_url_valid('https://user:pass@example.com/feed'));
+    $parsed = feedpublisher_portability_parse(json_encode(array('format' => 'mybb-feed-publisher-config', 'version' => 1,
+        'feeds' => array(array('name' => 'Imported', 'url' => 'https://example.com/feed', 'interval_minutes' => 1, 'enabled' => 1)))));
+    $t->assertSame('config', $parsed['type']);
+    $record = feedpublisher_portability_defaults($parsed['entries'][0], 5, 9, false);
+    $t->assertSame(5, $record['fid']);
+    $t->assertSame(9, $record['uid']);
+    $t->assertSame(5, $record['interval_minutes']);
+    $t->assertSame(0, $record['enabled']);
+    $t->assertSame(0, $record['thread_prefix_id']);
 });
 
 $suite->test('future-date policies and dateline fallback', function ($t) {

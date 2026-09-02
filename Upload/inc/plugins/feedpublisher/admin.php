@@ -24,6 +24,7 @@ function feedpublisher_admin_controller()
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/queue.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/publisher.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/operations.php';
+    require_once MYBB_ROOT . 'inc/plugins/feedpublisher/portability.php';
 
     $action = $mybb->get_input('action');
     if ($action === 'save') {
@@ -40,6 +41,16 @@ function feedpublisher_admin_controller()
         feedpublisher_admin_moderate_commit();
     } elseif ($action === 'moderation') {
         feedpublisher_admin_moderation();
+    } elseif ($action === 'tools') {
+        feedpublisher_portability_page();
+    } elseif ($action === 'import_preview') {
+        feedpublisher_portability_preview();
+    } elseif ($action === 'import_apply') {
+        feedpublisher_portability_apply();
+    } elseif ($action === 'export_opml') {
+        feedpublisher_portability_export_opml();
+    } elseif ($action === 'export_config') {
+        feedpublisher_portability_export_config();
     } elseif ($action === 'delete') {
         feedpublisher_admin_delete();
     } elseif ($action === 'add' || $action === 'edit') {
@@ -73,6 +84,11 @@ function feedpublisher_admin_tabs($active)
             'title' => 'Review queue',
             'link' => 'index.php?module=config/feedpublisher&amp;action=moderation',
             'description' => 'Review entries held for administrator approval.',
+        ),
+        'tools' => array(
+            'title' => 'Import / export',
+            'link' => 'index.php?module=config/feedpublisher&amp;action=tools',
+            'description' => 'Back up, migrate, or bulk-create feed configuration.',
         ),
     ), $active);
 }
