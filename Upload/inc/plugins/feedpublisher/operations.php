@@ -23,7 +23,7 @@ function feedpublisher_discover_feed($feed)
         $initialComplete = true;
         foreach ($plan as $entry) {
             $result = feedpublisher_queue_stage($feed, $entry['item'], $entry['state']);
-            if ($result === 'queued') {
+            if (in_array($result, array('queued', 'pending_approval'), true)) {
                 ++$totals['staged'];
             } elseif (isset($totals[$result])) {
                 ++$totals[$result];

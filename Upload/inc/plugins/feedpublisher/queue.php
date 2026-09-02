@@ -88,15 +88,18 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
         return 'existing';
     }
 
+    if ($state === 'queued' && isset($feed['publication_mode']) && $feed['publication_mode'] === 'approval') {
+        $state = 'pending_approval';
+    }
     $queued = (int) $db->fetch_field($db->simple_select(
         'feedpublisher_queue',
         'COUNT(id) AS total',
-        "feed_id={$feedId} AND state IN ('queued','processing','failed')"
+        "feed_id={$feedId} AND state IN ('queued','pending_approval','processing','failed')"
     ), 'total');
-    if ($state === 'queued' && $queued >= 1000) {
+    if (in_array($state, array('queued', 'pending_approval'), true) && $queued >= 1000) {
         return 'full';
     }
-    $prepared = $state === 'queued' ? feedpublisher_prepare_item($feed, $item) : null;
+    $prepared = in_array($state, array('queued', 'pending_approval'), true) ? feedpublisher_prepare_item($feed, $item) : null;
 
     $record = array(
         'feed_id' => $feedId,
@@ -104,17 +107,17 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
         'title' => $db->escape_string(my_substr($item['title'], 0, 255)),
         'source_url' => $db->escape_string(substr($item['url'], 0, 2048)),
         'author' => $db->escape_string(my_substr(isset($item['author']) ? $item['author'] : '', 0, 255)),
-        'media_json' => $state === 'queued' ? $db->escape_string(json_encode(isset($item['media']) ? array_slice($item['media'], 0, 10) : array())) : '',
-        'raw_content' => $state === 'queued' ? $db->escape_string($item['content']) : '',
-        'content' => $state === 'queued' ? $db->escape_string($prepared['content']) : '',
+        'media_json' => in_array($state, array('queued', 'pending_approval'), true) ? $db->escape_string(json_encode(isset($item['media']) ? array_slice($item['media'], 0, 10) : array())) : '',
+        'raw_content' => in_array($state, array('queued', 'pending_approval'), true) ? $db->escape_string($item['content']) : '',
+        'content' => in_array($state, array('queued', 'pending_approval'), true) ? $db->escape_string($prepared['content']) : '',
         'source_published' => $datePlan['source_time'],
         'discovered_at' => TIME_NOW,
-        'available_at' => $state === 'queued' ? $datePlan['available_at'] : TIME_NOW,
+        'available_at' => in_array($state, array('queued', 'pending_approval'), true) ? $datePlan['available_at'] : TIME_NOW,
         'state' => $state,
-        'published_at' => $state === 'queued' ? 0 : TIME_NOW,
+        'published_at' => in_array($state, array('queued', 'pending_approval'), true) ? 0 : TIME_NOW,
     );
     $db->insert_query('feedpublisher_queue', $record);
-    if ($state !== 'queued') {
+    if (!in_array($state, array('queued', 'pending_approval'), true)) {
         $disposition = isset($item['_disposition']) && in_array($item['_disposition'], array('filtered', 'skipped', 'rejected'), true)
             ? $item['_disposition'] : $state;
         $db->write_query('INSERT IGNORE INTO ' . TABLE_PREFIX . 'feedpublisher_items'
@@ -130,7 +133,7 @@ function feedpublisher_queue_counts($feedId)
 {
     global $db;
 
-    $counts = array('queued' => 0, 'processing' => 0, 'published' => 0, 'failed' => 0, 'skipped' => 0, 'uncertain' => 0, 'rejected' => 0);
+    $counts = array('queued' => 0, 'pending_approval' => 0, 'processing' => 0, 'published' => 0, 'failed' => 0, 'skipped' => 0, 'uncertain' => 0, 'rejected' => 0);
     $query = $db->simple_select(
         'feedpublisher_queue',
         'state, COUNT(id) AS total',

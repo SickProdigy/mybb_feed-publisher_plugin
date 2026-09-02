@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.25 - 2026-09-02
+
+- Add automatic and administrator-approval publication modes per feed, with
+  prepared entries held outside scheduled dispatch until explicitly approved.
+- Add a permission-protected, CSRF-protected ACP review queue that reads only
+  stored queue snapshots and shows final composed output without re-fetching.
+- Support approve-original, edit-and-approve, 24-hour defer, and permanent
+  rejection actions with administrator and diagnostic logging.
+- Return approvals to the normal paced publisher and its existing permission,
+  validation, and deduplication reservation flow; persist rejections durably.
+
 ## 0.1.24 - 2026-09-02
 
 - Parse up to 10 distinct RSS enclosures, Media RSS content/thumbnail records,

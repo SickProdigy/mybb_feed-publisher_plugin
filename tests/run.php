@@ -361,6 +361,20 @@ $suite->test('publication failure releases reservation and requeues item', funct
     $t->assertContains('publisher failed', $db->queue[1]['last_error']);
 });
 
+$suite->test('moderated entries are excluded from scheduled publication', function ($t) {
+    global $db;
+    $db = new FeedPublisherQueueDb;
+    $db->queue[1] = array('id' => 1, 'feed_id' => 7, 'item_key' => hash('sha256', 'moderated'), 'source_url' => 'https://example.com/a',
+        'state' => 'pending_approval', 'available_at' => 0, 'attempts' => 0, 'claim_token' => '', 'source_published' => 0, 'discovered_at' => 1);
+    $feed = array('id' => 7, 'publishing_paused' => 0, 'publish_interval_minutes' => 5, 'last_published' => 0,
+        'max_posts_per_run' => 1, 'queue_order' => 'oldest');
+    $called = false;
+    $result = feedpublisher_queue_dispatch($feed, function () use (&$called) { $called = true; });
+    $t->assertSame(false, $called);
+    $t->assertSame(0, $result['published']);
+    $t->assertSame('pending_approval', $db->queue[1]['state']);
+});
+
 $suite->test('RSS, RDF, and Atom fixtures parse with format metadata', function ($t) {
     if (!extension_loaded('SimpleXML') || !extension_loaded('dom')) { $t->skip('PHP SimpleXML and DOM are not installed.'); }
     $metadata = array();
@@ -434,6 +448,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
     $t->assertContains("feedpublisher_install_logs_table", $source);
     $t->assertContains("'disposition'", $source);
+    $t->assertContains("'publication_mode'", $source);
     $t->assertContains("drop_table('feedpublisher_logs')", $source);
     $t->assertContains("delete_query('tasks'", $source);
 });

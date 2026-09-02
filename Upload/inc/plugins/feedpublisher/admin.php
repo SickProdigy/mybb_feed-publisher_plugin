@@ -36,6 +36,10 @@ function feedpublisher_admin_controller()
         feedpublisher_admin_preview_saved();
     } elseif ($action === 'diagnostics') {
         feedpublisher_admin_diagnostics();
+    } elseif ($action === 'moderate') {
+        feedpublisher_admin_moderate_commit();
+    } elseif ($action === 'moderation') {
+        feedpublisher_admin_moderation();
     } elseif ($action === 'delete') {
         feedpublisher_admin_delete();
     } elseif ($action === 'add' || $action === 'edit') {
@@ -64,6 +68,11 @@ function feedpublisher_admin_tabs($active)
             'title' => 'Diagnostics',
             'link' => 'index.php?module=config/feedpublisher&amp;action=diagnostics',
             'description' => 'Review runtime health, feed status, safe logs, and support details.',
+        ),
+        'moderation' => array(
+            'title' => 'Review queue',
+            'link' => 'index.php?module=config/feedpublisher&amp;action=moderation',
+            'description' => 'Review entries held for administrator approval.',
         ),
     ), $active);
 }
@@ -124,7 +133,7 @@ function feedpublisher_admin_diagnostics()
         $feedTable->construct_cell((int) $feed['last_success_at'] ? my_date('normal', (int) $feed['last_success_at']) : 'Never');
         $retry = (int) $feed['next_fetch_at'] > TIME_NOW ? 'Retry ' . my_date('relative', (int) $feed['next_fetch_at']) : 'No active backoff';
         $feedTable->construct_cell($retry . (!empty($feed['last_error']) ? '<br><small style="color:#a00">' . htmlspecialchars_uni(feedpublisher_safe_diagnostic_text($feed['last_error'])) . '</small>' : ''));
-        $feedTable->construct_cell('Queued ' . $counts['queued'] . '; failed ' . $counts['failed'] . '; uncertain ' . $counts['uncertain']);
+        $feedTable->construct_cell('Queued ' . $counts['queued'] . '; awaiting approval ' . $counts['pending_approval'] . '; failed ' . $counts['failed'] . '; uncertain ' . $counts['uncertain']);
         $feedTable->construct_cell((int) $feed['last_published'] ? my_date('normal', (int) $feed['last_published']) : 'Never');
         $feedTable->construct_row();
     }
@@ -209,7 +218,7 @@ function feedpublisher_admin_list()
 
         $id = (int) $feed['id'];
         $counts = feedpublisher_queue_counts($id);
-        $queueStatus = 'Queued: ' . $counts['queued'] . '<br>Processing: ' . $counts['processing']
+        $queueStatus = 'Queued: ' . $counts['queued'] . '<br>Awaiting approval: ' . $counts['pending_approval'] . '<br>Processing: ' . $counts['processing']
             . '<br>Published: ' . $counts['published'] . '<br>Skipped: ' . $counts['skipped']
             . '<br>Failed: ' . $counts['failed'] . '<br>Uncertain: ' . $counts['uncertain']
             . '<br>Rejected: ' . $counts['rejected'];
@@ -278,6 +287,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'require_entry_body' => 0,
         'require_entry_media' => 0,
         'media_mode' => 'ignore',
+        'publication_mode' => 'automatic',
         'enabled' => 0,
         'interval_minutes' => 60,
         'publish_interval_minutes' => 60,
@@ -370,6 +380,8 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         . $form->generate_check_box('require_entry_media', 1, 'Require an image, enclosure, or Media RSS item', array('checked' => !empty($values['require_entry_media']))));
     $container->output_row('Feed media', 'Handle up to 10 safe HTTP/HTTPS enclosure, Media RSS, thumbnail, or Atom enclosure URLs per entry. Images can be hotlinked; videos and other files always become ordinary links. No files are downloaded and no embeds or iframes are created.',
         $form->generate_select_box('media_mode', array('ignore' => 'Ignore feed media (default)', 'links' => 'Add safe media links', 'hotlink' => 'Show images; link videos and files'), $values['media_mode']));
+    $container->output_row('Publication mode', 'Automatic creates threads according to the normal schedule. Require approval prepares and stores new entries without publishing until an administrator approves them in Review queue.',
+        $form->generate_select_box('publication_mode', array('automatic' => 'Publish automatically', 'approval' => 'Require administrator approval'), $values['publication_mode']));
     if (!empty($values['id'])) {
         $container->output_row('Eligibility rule changes', 'Changing eligibility requires explicit re-evaluation. This removes only prior filter-rejection history so currently visible entries can be evaluated again.',
             $form->generate_check_box('reset_filter_history', 1, 'Confirm filter change and re-evaluate previously filtered entries.'));
@@ -383,7 +395,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent queues one; recent count queues a bounded number; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only', 'recent' => 'Recent count', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
     $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
     if (!empty($values['initialized_at'])) {
-        $container->output_row('Initial scan completed', my_date('relative', (int) $values['initialized_at']) . '. Changing the policy requires confirmation and resets queued, skipped, and failed entries for the next discovery.', $form->generate_check_box('reset_initial_policy', 1, 'Confirm reset if the policy or recent count is changed.'));
+        $container->output_row('Initial scan completed', my_date('relative', (int) $values['initialized_at']) . '. Changing the policy requires confirmation and resets queued, awaiting-approval, skipped, and failed entries for the next discovery.', $form->generate_check_box('reset_initial_policy', 1, 'Confirm reset if the policy or recent count is changed.'));
     }
     $container->output_row('Import interval <em>*</em>', 'Minutes between checks (minimum 5, maximum 10080).', $form->generate_numeric_field('interval_minutes', (int) $values['interval_minutes'], array('min' => 5, 'max' => 10080)));
     $container->output_row('Publication interval <em>*</em>', 'Minimum minutes between publishing batches for this feed.', $form->generate_numeric_field('publish_interval_minutes', (int) $values['publish_interval_minutes'], array('min' => 5, 'max' => 10080)));
@@ -488,6 +500,7 @@ function feedpublisher_admin_save()
         'require_entry_body' => $mybb->get_input('require_entry_body', MyBB::INPUT_INT) ? 1 : 0,
         'require_entry_media' => $mybb->get_input('require_entry_media', MyBB::INPUT_INT) ? 1 : 0,
         'media_mode' => $mybb->get_input('media_mode'),
+        'publication_mode' => $mybb->get_input('publication_mode'),
         'reset_filter_history' => $mybb->get_input('reset_filter_history', MyBB::INPUT_INT) ? 1 : 0,
         'interval_minutes' => $mybb->get_input('interval_minutes', MyBB::INPUT_INT),
         'publish_interval_minutes' => $mybb->get_input('publish_interval_minutes', MyBB::INPUT_INT),
@@ -589,6 +602,7 @@ function feedpublisher_admin_save()
         $errors[] = 'Source age filters are outside their allowed range.';
     }
     if (!in_array($values['media_mode'], array('ignore', 'links', 'hotlink'), true)) $errors[] = 'Select a valid feed-media handling option.';
+    if (!in_array($values['publication_mode'], array('automatic', 'approval'), true)) $errors[] = 'Select a valid publication mode.';
     $ruleErrors = array();
     feedpublisher_eligibility_rules($values['eligibility_rules'], $ruleErrors);
     foreach ($ruleErrors as $ruleError) { $errors[] = $ruleError; }
@@ -688,6 +702,7 @@ function feedpublisher_admin_save()
         'require_entry_body' => $values['require_entry_body'],
         'require_entry_media' => $values['require_entry_media'],
         'media_mode' => $db->escape_string($values['media_mode']),
+        'publication_mode' => $db->escape_string($values['publication_mode']),
         'enabled' => $values['enabled'],
         'interval_minutes' => $values['interval_minutes'],
         'publish_interval_minutes' => $values['publish_interval_minutes'],
@@ -712,7 +727,7 @@ function feedpublisher_admin_save()
     if ($id) {
         $db->update_query('feedpublisher_feeds', $record, 'id=' . $id);
         if ($policyChanged && $values['reset_initial_policy']) {
-            $db->delete_query('feedpublisher_queue', "feed_id=" . $id . " AND state IN ('queued','skipped','failed')");
+            $db->delete_query('feedpublisher_queue', "feed_id=" . $id . " AND state IN ('queued','pending_approval','skipped','failed')");
             $db->delete_query('feedpublisher_items', 'feed_id=' . $id . " AND disposition='skipped'");
         }
         if ($identityChanged && $values['reset_identity_history']) {
@@ -828,6 +843,8 @@ function feedpublisher_admin_initial_preview($values)
             $action = empty($entry['eligibility']['eligible'])
                 ? 'Reject permanently: ' . $entry['eligibility']['reason']
                 : 'Reject permanently; do not publish';
+        } elseif ($willPublish && isset($values['publication_mode']) && $values['publication_mode'] === 'approval') {
+            $action = $datePlan['available_at'] > TIME_NOW ? 'Hold until scheduled time, then require administrator approval' : 'Require administrator approval before paced publishing';
         } elseif ($willPublish && $datePlan['available_at'] > TIME_NOW) {
             $action = 'Hold until scheduled time, then queue for paced publishing';
         } elseif ($willPublish) {
@@ -865,7 +882,7 @@ function feedpublisher_admin_initial_preview($values)
             . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Effective queue time</th><td style="padding:6px;border-bottom:1px solid #ddd">'
             . ($entry['state'] === 'queued' ? my_date('normal', $datePlan['available_at']) : 'Not queued') . '</td></tr>'
             . '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Intended thread time</th><td style="padding:6px;border-bottom:1px solid #ddd">'
-            . ($entry['state'] === 'queued' ? my_date('normal', $datePlan['thread_time']) : 'No thread will be created') . '</td></tr>';
+            . ($entry['state'] === 'queued' ? (isset($values['publication_mode']) && $values['publication_mode'] === 'approval' ? 'After administrator approval and normal pacing' : my_date('normal', $datePlan['thread_time'])) : 'No thread will be created') . '</td></tr>';
         try {
             $prepared = feedpublisher_prepare_item($values, $item);
             $removed = max(0, $prepared['raw_bytes'] - $prepared['cleaned_bytes']);
@@ -936,6 +953,104 @@ function feedpublisher_admin_media_preview($media, $mode)
             . '<br><small>' . htmlspecialchars_uni($entry['url']) . '</small>';
     }
     return implode('<br>', $rows);
+}
+
+function feedpublisher_admin_moderation()
+{
+    global $db, $mybb, $page;
+    $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
+    $page->add_breadcrumb_item('Review queue');
+    $page->output_header('Feed Publisher review queue');
+    feedpublisher_admin_tabs('moderation');
+
+    $deferred = (int) $db->fetch_field($db->simple_select('feedpublisher_queue', 'COUNT(id) AS total',
+        "state='pending_approval' AND available_at>" . TIME_NOW), 'total');
+    echo '<p>These entries were prepared during discovery and are not fetched again for review. Approval returns an entry to the normal paced publishing queue; it does not bypass forum permissions, deduplication reservations, or publication validation.</p>';
+    if ($deferred) echo '<p><strong>' . $deferred . '</strong> future-dated or deferred entries will appear when their review time arrives.</p>';
+
+    $query = $db->write_query('SELECT q.id AS queue_id,q.feed_id,q.title,q.source_url,q.raw_content,q.content,q.source_published,q.discovered_at,q.media_json,'
+        . 'f.* FROM ' . TABLE_PREFIX . 'feedpublisher_queue q INNER JOIN ' . TABLE_PREFIX . 'feedpublisher_feeds f ON (f.id=q.feed_id) '
+        . "WHERE q.state='pending_approval' AND q.available_at<=" . TIME_NOW . ' ORDER BY q.discovered_at ASC,q.id ASC LIMIT 100');
+    $shown = 0;
+    while ($item = $db->fetch_array($query)) {
+        ++$shown;
+        $media = json_decode($item['media_json'], true);
+        if (!is_array($media)) $media = array();
+        $previewItem = $item;
+        $previewItem['media'] = $media;
+        $post = feedpublisher_compose_post($item, $previewItem);
+        $removed = max(0, strlen($item['raw_content']) - strlen($item['content']));
+        echo '<details' . ($shown === 1 ? ' open' : '') . ' style="margin:0 0 12px;border:1px solid #bbb;padding:8px">'
+            . '<summary><strong>' . htmlspecialchars_uni($item['name']) . '</strong> &mdash; ' . htmlspecialchars_uni($post['title']) . '</summary>'
+            . '<div style="padding:10px"><p><strong>Source:</strong> <a href="' . htmlspecialchars_uni($item['source_url']) . '" target="_blank" rel="noopener noreferrer">' . htmlspecialchars_uni($item['source_url']) . '</a><br>'
+            . '<strong>Prepared:</strong> ' . my_date('normal', (int) $item['discovered_at']) . '<br>'
+            . '<strong>Cleanup:</strong> source ' . strlen($item['raw_content']) . ' bytes; prepared ' . strlen($item['content']) . ' bytes; removed ' . $removed . ' bytes<br>'
+            . '<strong>MyBB prefix:</strong> ' . ((int) $item['thread_prefix_id'] ? 'Prefix #' . (int) $item['thread_prefix_id'] : 'None') . '<br>'
+            . '<strong>Media:</strong> ' . feedpublisher_admin_media_preview($media, $item['media_mode']) . '</p>'
+            . '<form method="post" action="index.php?module=config/feedpublisher&amp;action=moderate">'
+            . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '">'
+            . '<input type="hidden" name="queue_id" value="' . (int) $item['queue_id'] . '">'
+            . '<p><label><strong>Prepared title</strong><br><input type="text" name="review_title" maxlength="255" style="width:100%" value="' . htmlspecialchars_uni($item['title']) . '"></label></p>'
+            . '<p><label><strong>Prepared body</strong><br><textarea name="review_body" style="width:100%;height:220px">' . htmlspecialchars_uni($item['content']) . '</textarea></label></p>'
+            . '<p><strong>Final title:</strong> ' . htmlspecialchars_uni($post['title']) . '</p>'
+            . '<pre style="white-space:pre-wrap;max-height:24em;overflow:auto;padding:10px;border:1px solid #ccc;background:#f7f7f7">' . htmlspecialchars_uni($post['body']) . '</pre>'
+            . '<p><button class="button" type="submit" name="decision" value="approve">Approve original</button> '
+            . '<button class="button" type="submit" name="decision" value="edit_approve">Save edits and approve</button> '
+            . '<button class="button" type="submit" name="decision" value="defer">Defer 24 hours</button> '
+            . '<button class="button" type="submit" name="decision" value="reject" onclick="return confirm(\'Reject this entry permanently?\')">Reject permanently</button></p></form></div></details>';
+    }
+    if (!$shown) echo '<p>No entries currently require approval.</p>';
+    $page->output_footer();
+}
+
+function feedpublisher_admin_moderate_commit()
+{
+    global $db, $mybb;
+    if ($mybb->request_method !== 'post') {
+        admin_redirect('index.php?module=config/feedpublisher&action=moderation');
+    }
+    verify_post_check($mybb->get_input('my_post_key'));
+    $queueId = $mybb->get_input('queue_id', MyBB::INPUT_INT);
+    $decision = $mybb->get_input('decision');
+    $item = $db->fetch_array($db->simple_select('feedpublisher_queue', '*', 'id=' . $queueId . " AND state='pending_approval'", array('limit' => 1)));
+    if (!$item) {
+        flash_message('The review entry no longer exists or has already been handled.', 'error');
+        admin_redirect('index.php?module=config/feedpublisher&action=moderation');
+    }
+    if ($decision === 'approve' || $decision === 'edit_approve') {
+        $update = array('state' => 'queued', 'last_error' => '', 'claim_token' => '', 'claimed_at' => 0);
+        if ($decision === 'edit_approve') {
+            $title = trim($mybb->get_input('review_title'));
+            $body = trim($mybb->get_input('review_body'));
+            if ($title === '' || $body === '' || my_strlen($title) > 255 || strlen($body) > 2097152) {
+                flash_message('Edited approval requires a title, a body, and no more than 2 MiB of prepared content.', 'error');
+                admin_redirect('index.php?module=config/feedpublisher&action=moderation');
+            }
+            $update['title'] = $db->escape_string($title);
+            $update['content'] = $db->escape_string($body);
+        }
+        $db->update_query('feedpublisher_queue', $update, 'id=' . $queueId . " AND state='pending_approval'");
+        $message = $decision === 'edit_approve' ? 'The edited entry was approved for paced publication.' : 'The entry was approved for paced publication.';
+    } elseif ($decision === 'defer') {
+        $db->update_query('feedpublisher_queue', array('available_at' => max(TIME_NOW, (int) $item['available_at']) + 86400),
+            'id=' . $queueId . " AND state='pending_approval'");
+        $message = 'The entry was deferred for 24 hours.';
+    } elseif ($decision === 'reject') {
+        $db->write_query('INSERT IGNORE INTO ' . TABLE_PREFIX . 'feedpublisher_items'
+            . ' (feed_id,item_key,source_url,disposition,tid,pid,imported_at) VALUES ('
+            . (int) $item['feed_id'] . ",'" . $db->escape_string($item['item_key']) . "','" . $db->escape_string($item['source_url'])
+            . "','rejected',0,0," . TIME_NOW . ')');
+        $db->update_query('feedpublisher_queue', array('state' => 'rejected', 'published_at' => TIME_NOW, 'last_error' => 'Rejected during administrator review.'),
+            'id=' . $queueId . " AND state='pending_approval'");
+        $message = 'The entry was rejected permanently.';
+    } else {
+        flash_message('Select a valid review action.', 'error');
+        admin_redirect('index.php?module=config/feedpublisher&action=moderation');
+    }
+    feedpublisher_log_event((int) $item['feed_id'], 'publication', 'info', $message);
+    log_admin_action('Feed Publisher moderation', $decision, (int) $item['feed_id'], $queueId);
+    flash_message($message, 'success');
+    admin_redirect('index.php?module=config/feedpublisher&action=moderation');
 }
 
 function feedpublisher_admin_preview_saved()

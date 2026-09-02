@@ -108,6 +108,14 @@ normal links. At most 10 distinct HTTP/HTTPS media URLs are retained per entry.
 Feed Publisher does not download attachments, inspect remote media, create local
 files, or insert iframe/embed HTML, so there is no plugin-owned media cleanup.
 
+Each feed can publish automatically or require administrator approval. Approval
+mode stores the already-fetched, cleaned entry as **Awaiting approval** and the
+scheduled publisher ignores it. **Review queue** shows the prepared and final
+composed output without another remote request. An authorized administrator can
+approve the original, edit the prepared title/body and approve, defer review for
+24 hours, or reject it permanently. Approved entries return to normal pacing
+and publication validation; rejected identities remain recorded for deduplication.
+
 Thread dates can use the time Feed Publisher posts to MyBB or a valid source
 publication time. Future-dated entries can be held, published using the current
 time, marked as seen, or permanently rejected. Source dates before 1980 or more
