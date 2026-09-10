@@ -36,8 +36,9 @@ Early development preview. The initial foundation includes:
 1. Upload the contents of `Upload` to the root of the MyBB installation.
 2. Activate **Feed Publisher** under **Admin CP → Configuration → Plugins**.
 3. Configure feeds under **Admin CP → Configuration → Feed Publisher**.
-4. Enable the installed **Feed Publisher imports** scheduled task. The task runs
-   every 5 minutes and each feed is checked only when its own interval is due.
+4. Confirm the installed **Feed Publisher imports** scheduled task is enabled.
+   New installations enable it automatically. The task runs every 5 minutes and
+   each feed is checked only when its own interval is due.
 
 Discovery stores entries in a persistent queue rather than publishing an entire
 feed at once. Queue release uses each feed publication interval, batch limit, and

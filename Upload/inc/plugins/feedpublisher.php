@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://sickgaming.net',
         'author' => 'SickProdigy',
         'authorsite' => 'https://sickgaming.net',
-        'version' => '0.1.28',
+        'version' => '0.1.29',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -280,7 +280,7 @@ function feedpublisher_install_task()
         'day' => '*',
         'month' => '*',
         'weekday' => '*',
-        'enabled' => 0,
+        'enabled' => 1,
         'logging' => 1,
     ));
 }

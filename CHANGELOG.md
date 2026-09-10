@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.29 - 2026-09-10
+
+- Enable newly installed Feed Publisher scheduled tasks by default so configured
+  feeds begin automatic discovery and paced publishing without a hidden setup step.
+- Preserve the enabled or disabled state of tasks that already exist.
+
 ## 0.1.28 - 2026-09-02
 
 - Complete issue #24 configuration restore by matching every feed's exported

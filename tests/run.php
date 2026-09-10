@@ -519,6 +519,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("'publication_mode'", $source);
     $t->assertContains("drop_table('feedpublisher_logs')", $source);
     $t->assertContains("delete_query('tasks'", $source);
+    $t->assertContains("'enabled' => 1", $source);
 });
 
 $suite->test('documentation covers deployment and known safety limits', function ($t) {
