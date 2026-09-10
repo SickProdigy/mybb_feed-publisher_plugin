@@ -25,6 +25,37 @@ class FeedPublisherException extends RuntimeException
     }
 }
 
+function feedpublisher_name_from_url($url)
+{
+    $parts = @parse_url(trim((string) $url));
+    if (!is_array($parts) || empty($parts['host'])) {
+        return '';
+    }
+
+    $host = strtolower(rtrim($parts['host'], '.'));
+    $host = preg_replace('/^www\./i', '', $host);
+    $segments = isset($parts['path']) ? explode('/', trim($parts['path'], '/')) : array();
+    $useful = array();
+
+    foreach ($segments as $segment) {
+        $segment = trim(rawurldecode($segment));
+        $segment = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $segment);
+        $segment = preg_replace('/\s+/u', ' ', trim($segment));
+        $stem = preg_replace('/\.(rss|atom|xml|php|json)$/i', '', $segment);
+        if ($stem === '' || preg_match('/^(feed|feeds|rss|atom|index)$/i', $stem)) {
+            continue;
+        }
+        $useful[] = str_replace(array('-', '_'), ' ', $stem);
+    }
+
+    $name = $host;
+    if (!empty($useful)) {
+        $name .= ' - ' . implode(' / ', array_slice($useful, -2));
+    }
+
+    return my_substr($name, 0, 150);
+}
+
 function feedpublisher_safe_log_text($text)
 {
     $text = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) $text);

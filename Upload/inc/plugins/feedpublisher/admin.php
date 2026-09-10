@@ -204,14 +204,40 @@ function feedpublisher_admin_diagnostics()
 
 function feedpublisher_admin_list()
 {
-    global $db, $page;
+    global $db, $mybb, $page;
 
     $page->add_breadcrumb_item('Feed Publisher');
     $page->output_header('Feed Publisher');
     feedpublisher_admin_tabs('feeds');
 
+    $sort = $mybb->get_input('sort');
+    $direction = strtolower($mybb->get_input('order')) === 'desc' ? 'DESC' : 'ASC';
+    $sortColumns = array(
+        'name' => 'f.name',
+        'url' => 'f.url',
+        'forum' => 'fo.name',
+        'user' => 'u.username',
+        'interval' => 'f.interval_minutes',
+        'status' => 'f.enabled',
+        'last' => 'f.last_checked',
+    );
+    if (!isset($sortColumns[$sort])) {
+        $sort = 'name';
+        $direction = 'ASC';
+    }
+
     $table = new Table;
-    foreach (array('Name', 'Destination forum', 'Posting user', 'Interval', 'Status', 'Queue', 'Last result', 'Controls') as $heading) {
+    $headings = array(
+        feedpublisher_admin_sort_link('Name', 'name', $sort, $direction) . ' / ' . feedpublisher_admin_sort_link('Feed', 'url', $sort, $direction),
+        feedpublisher_admin_sort_link('Destination forum', 'forum', $sort, $direction),
+        feedpublisher_admin_sort_link('Posting user', 'user', $sort, $direction),
+        feedpublisher_admin_sort_link('Interval', 'interval', $sort, $direction),
+        feedpublisher_admin_sort_link('Status', 'status', $sort, $direction),
+        'Queue',
+        feedpublisher_admin_sort_link('Last result', 'last', $sort, $direction),
+        'Controls',
+    );
+    foreach ($headings as $heading) {
         $table->construct_header($heading);
     }
 
@@ -220,7 +246,7 @@ function feedpublisher_admin_list()
         . 'FROM ' . TABLE_PREFIX . 'feedpublisher_feeds f '
         . 'LEFT JOIN ' . TABLE_PREFIX . 'forums fo ON (fo.fid=f.fid) '
         . 'LEFT JOIN ' . TABLE_PREFIX . 'users u ON (u.uid=f.uid) '
-        . 'ORDER BY f.name ASC'
+        . 'ORDER BY ' . $sortColumns[$sort] . ' ' . $direction . ', f.name ASC, f.id ASC'
     );
 
     while ($feed = $db->fetch_array($query)) {
@@ -263,6 +289,18 @@ function feedpublisher_admin_list()
 
     $table->output('Configured feeds');
     $page->output_footer();
+}
+
+function feedpublisher_admin_sort_link($label, $column, $activeSort, $activeDirection)
+{
+    $nextDirection = $activeSort === $column && $activeDirection === 'ASC' ? 'desc' : 'asc';
+    $indicator = '';
+    if ($activeSort === $column) {
+        $indicator = $activeDirection === 'ASC' ? ' &uarr;' : ' &darr;';
+    }
+
+    return '<a href="index.php?module=config/feedpublisher&amp;sort=' . $column . '&amp;order=' . $nextDirection . '">'
+        . htmlspecialchars_uni($label) . $indicator . '</a>';
 }
 
 function feedpublisher_admin_form($action, $values = array(), $errors = array())
@@ -362,7 +400,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $form = new Form('index.php?module=config/feedpublisher&amp;action=save', 'post');
     echo $form->generate_hidden_field('id', (int) $values['id']);
     $container = new FormContainer($action === 'edit' ? 'Edit feed' : 'Add feed');
-    $container->output_row('Name <em>*</em>', 'A descriptive name shown in the Admin CP and task logs.', $form->generate_text_box('name', $values['name']));
+    $container->output_row('Name', 'A descriptive name shown in the Admin CP and task logs. Leave blank to generate one from the feed URL.', $form->generate_text_box('name', $values['name']));
     $container->output_row('Feed or website URL <em>*</em>', 'Enter an exact public RSS/Atom URL, or enter a normal website URL and use Find feeds.', $form->generate_text_box('url', $values['url']));
     $refresh = "this.form.elements['refresh_prefixes'].click();";
     $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum. Changing it refreshes the available MyBB prefixes.', $form->generate_select_box('fid', $forums, (int) $values['fid'], array('onchange' => $refresh)));
@@ -557,6 +595,9 @@ function feedpublisher_admin_save()
         'remove_source_links' => $mybb->get_input('remove_source_links', MyBB::INPUT_INT) ? 1 : 0,
         'enabled' => $mybb->get_input('enabled', MyBB::INPUT_INT) ? 1 : 0,
     );
+    if ($values['name'] === '') {
+        $values['name'] = feedpublisher_name_from_url($values['url']);
+    }
     $errors = array();
 
     if ($values['refresh_prefixes']) {

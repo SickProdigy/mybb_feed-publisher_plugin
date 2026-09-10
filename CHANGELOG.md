@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.30 - 2026-09-10
+
+- Add server-side sorting to the configured-feeds table by name, feed URL,
+  destination forum, posting user, interval, status, or last result.
+- Keep Name and Feed sort controls together above their shared identity column.
+- Generate a readable feed name from its URL when the Name field is left blank.
+
 ## 0.1.29 - 2026-09-10
 
 - Enable newly installed Feed Publisher scheduled tasks by default so configured

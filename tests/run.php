@@ -192,6 +192,16 @@ class FeedPublisherQueueDb
 
 $suite = new FeedPublisherTestSuite;
 
+$suite->test('feed names can be generated safely from URLs', function ($t) {
+    $t->assertSame(
+        'news.example.com - topics / space news',
+        feedpublisher_name_from_url('https://www.News.Example.com/topics/space-news/feed.xml?token=secret')
+    );
+    $t->assertSame('feeds.example.com', feedpublisher_name_from_url('https://feeds.example.com/rss.php'));
+    $t->assertSame('example.com - news today', feedpublisher_name_from_url('https://example.com/news%00today/feed.xml'));
+    $t->assertSame('', feedpublisher_name_from_url('not a URL'));
+});
+
 $suite->test('identity normalization and stable keys', function ($t) {
     $a = feedpublisher_normalize_item_identity('HTTPS://Example.COM:443/post?q=1#fragment');
     $b = feedpublisher_normalize_item_identity('https://example.com/post?q=1');
@@ -510,6 +520,7 @@ $suite->test('unsafe HTML is removed before MyCode conversion', function ($t) {
 
 $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $source = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher.php');
+    $adminSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/admin.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
@@ -520,6 +531,9 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("drop_table('feedpublisher_logs')", $source);
     $t->assertContains("delete_query('tasks'", $source);
     $t->assertContains("'enabled' => 1", $source);
+    $t->assertContains("'url' => 'f.url'", $adminSource);
+    $t->assertContains("'forum' => 'fo.name'", $adminSource);
+    $t->assertContains("feedpublisher_admin_sort_link('Name'", $adminSource);
 });
 
 $suite->test('documentation covers deployment and known safety limits', function ($t) {

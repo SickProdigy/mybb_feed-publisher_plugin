@@ -40,6 +40,10 @@ Early development preview. The initial foundation includes:
    New installations enable it automatically. The task runs every 5 minutes and
    each feed is checked only when its own interval is due.
 
+The configured-feeds table can be sorted by name, feed URL, destination forum,
+posting user, interval, status, or last result. A feed name remains editable; if
+left blank, Feed Publisher generates one from the URL host and useful path parts.
+
 Discovery stores entries in a persistent queue rather than publishing an entire
 feed at once. Queue release uses each feed publication interval, batch limit, and
 ordering preference. Due queue entries are published as threads by the configured
