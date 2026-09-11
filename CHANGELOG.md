@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reorganize the README into task-focused setup, workflow, configuration,
+  operations, security, and troubleshooting sections.
+- Correct stale limitations that still described full-article retrieval and
+  approval moderation as unavailable.
+
 ## 0.1.30 - 2026-09-10
 
 - Add server-side sorting to the configured-feeds table by name, feed URL,

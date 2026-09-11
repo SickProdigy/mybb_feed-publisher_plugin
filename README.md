@@ -1,28 +1,22 @@
 # MyBB Feed Publisher
 
-MyBB Feed Publisher imports RSS and Atom entries into a MyBB forum. It is an
-independent implementation and does not require raw HTML to be enabled in
-posts.
+Feed Publisher imports RSS, RDF, and Atom entries as MyBB threads. It uses
+MyBB's post data handler, converts remote HTML to safe MyCode, and does not
+require raw HTML to be enabled in posts.
 
-## Current status
+> **Status:** Development preview (`0.1.30`). Test upgrades and feed behavior on
+> a non-production MyBB installation before deployment.
 
-Early development preview. The initial foundation includes:
+## Highlights
 
-- plugin install/uninstall lifecycle;
-- feed and imported-item database tables;
-- a MyBB scheduled task entry point;
-- RSS 0.9x/1.0 RDF/2.0 and Atom parsing with bounded encoding normalization;
-- deterministic HTML cleanup and HTML-to-MyCode conversion;
-- URL validation, response-size limits, timeouts, and duplicate detection;
-- Admin CP feed management with destination forum, posting user, enabled state,
-  cleanup configuration, status visibility, and per-feed intervals;
-- persistent feed-entry staging with per-feed publication pacing, queue ordering,
-  pause controls, bounded retries, and queue status counts;
-- per-feed initial import policies for all available entries, most recent only,
-  a bounded recent count, or starting after the current backlog;
-- permission-aware MyBB thread creation through the official post data handler,
-  with configurable source attribution, custom title text, and optional native
-  MyBB thread prefixes.
+- RSS 0.9x, RSS 1.0/RDF, RSS 2.0, and Atom parsing
+- Per-feed destination forum, posting user, schedule, and publication pacing
+- Persistent queue with retries, approval workflow, and recovery controls
+- Duplicate detection, entry filters, source cleanup, and MyCode conversion
+- Optional linked full-article retrieval and media handling
+- Dry-run previews, feed discovery, connection testing, and diagnostics
+- OPML feed-list export and versioned JSON configuration backups
+- Bounded network, parsing, storage, and cleanup operations
 
 ## Requirements
 
@@ -33,180 +27,279 @@ Early development preview. The initial foundation includes:
 
 ## Install
 
-1. Upload the contents of `Upload` to the root of the MyBB installation.
-2. Activate **Feed Publisher** under **Admin CP → Configuration → Plugins**.
-3. Configure feeds under **Admin CP → Configuration → Feed Publisher**.
-4. Confirm the installed **Feed Publisher imports** scheduled task is enabled.
-   New installations enable it automatically. The task runs every 5 minutes and
-   each feed is checked only when its own interval is due.
+1. Upload the contents of `Upload/` to the MyBB installation root.
+2. Activate **Feed Publisher** under **Admin CP -> Configuration -> Plugins**.
+3. Open **Admin CP -> Configuration -> Feed Publisher**.
+4. Add a feed URL, destination forum, and posting user.
+5. Use **Test connection** or **Preview** before enabling the feed.
+6. Confirm **Feed Publisher imports** is enabled under **Tools & Maintenance ->
+   Task Manager**.
+
+New installations enable the scheduled task automatically. It runs every five
+minutes, but each feed is fetched and published only when its own intervals are
+due.
+
+## How Publishing Works
+
+Feed Publisher separates discovery from publication:
+
+1. The scheduled task fetches feeds that are due.
+2. Parsed entries pass through eligibility, cleanup, and duplicate checks.
+3. Accepted entries are stored in a persistent queue.
+4. Due queue entries are released according to each feed's publication
+   interval, batch limit, and oldest/newest ordering preference.
+5. MyBB validates the destination forum and effective posting permissions.
+6. The entry is published through MyBB's official post data handler.
+
+This prevents a large source feed from publishing its entire backlog at once.
+Each feed is limited to 1,000 active queued, processing, or failed entries.
+
+## Managing Feeds
 
 The configured-feeds table can be sorted by name, feed URL, destination forum,
-posting user, interval, status, or last result. A feed name remains editable; if
-left blank, Feed Publisher generates one from the URL host and useful path parts.
+posting user, fetch interval, status, or last result.
 
-Discovery stores entries in a persistent queue rather than publishing an entire
-feed at once. Queue release uses each feed publication interval, batch limit, and
-ordering preference. Due queue entries are published as threads by the configured
-MyBB user after the destination forum and effective posting permissions are
-validated at runtime.
+Feed names remain editable. When Name is left blank, Feed Publisher generates a
+readable name from the URL host and useful path parts.
 
-Duplicate detection defaults to normalized GUID/link identity for backward
-compatibility. Feeds with missing or unstable identifiers may instead use a
-versioned normalized title, normalized content fingerprint, or a conservative
-title-plus-content fingerprint. Title matching can merge unrelated entries with
-the same headline; content matching treats meaningful edits as new entries; the
-combined strategy avoids more false matches but will not recognize edited
-copies. Changing strategy requires an explicit queue/import-history reset and
-may make previously published source entries eligible again.
+### Finding and Testing Feeds
 
-Terminal queue history has configurable age and per-state count limits and is
-cleaned in batches of at most 100 records. Imported-item duplicate history is
-retained forever by default; enabling age-based pruning requires explicit risk
-confirmation because an old source entry may then become eligible again. Strict
-source reconciliation is optional and rejects only unpublished queued entries
-missing from a successful, non-empty feed scan. It is suppressed whenever the
-feed's entry count unexpectedly shrinks. These policies never delete or modify
-published MyBB threads or posts.
+Use **Find feeds** when you know a website address but not its feed endpoint. It
+fetches one page and lists declared RSS, RDF, and Atom alternate links. It does
+not crawl the website.
 
-Per-feed eligibility rules can include or exclude entries by title, source URL,
-category/tag, or body using plain case-insensitive substrings or bounded regular
-expressions. Optional source-age, non-empty-body, and image/media requirements
-run before initial-policy selection and queue staging. Dry run reports the exact
-decision. Filtered and initially skipped identities are retained independently
-of removable queue history; changing filters requires explicit re-evaluation
-and resets only prior filter rejections.
+Use **Test connection** to validate an exact endpoint without saving, queueing,
+or publishing anything. The result includes safe fetch metadata, detected feed
+format and encoding, item count, and newest valid source date. Response bodies
+are never displayed.
 
-Cleanup runs on source HTML before safe MyCode conversion. Each feed can remove
-common byline/source blocks, up to 50 simple element selectors, and up to 20
-validated removal-only regular expressions. Supported selectors are `tag`,
-`.class`, `#id`, `tag.class`, `[attribute]`, and `tag[attribute]`, one
-per line. The initial-selection preview displays the resulting cleaned MyCode.
-Saved feeds also have a direct **Preview** action. Both preview paths are dry
-runs: they use the production fetch, parse, cleanup, and conversion pipeline,
-show detected feed format and source encoding plus existing import/queue state,
-and do not write plugin or forum data.
+Use **Preview** to run the production fetch, parse, cleanup, conversion, and
+composition path without writing plugin or forum data. Preview also reports
+existing import and queue state.
 
-When the exact endpoint is unknown, **Find feeds** fetches one website page and
-lists only its declared RSS/RDF/Atom alternate links; it never crawls the site.
-**Test connection** validates an exact endpoint without saving or queueing and
-reports the safe HTTP/fetch/parse metadata, detected format and encoding, item
-count, and newest source date. Both actions use the production network and XML
-safety controls and never display response bodies.
+## Initial Import and Duplicates
 
-Each feed may prepend arbitrary safe text such as `[RSS]` to generated subjects
-and may independently select a built-in MyBB thread prefix available to its
-destination forum and posting user. Prefix eligibility is checked again at
-publication time, and dry run shows the exact subject plus the native prefix.
+Each feed can begin with one of four initial-import policies:
 
-Post bodies may also use optional MyCode headers and footers. Templates accept
-only `{title}`, `{source_url}`, `{feed_name}`, `{author}`, and
-`{published_date}`; feed values are escaped before substitution and templates
-never execute PHP or raw HTML. A character limit can produce a word-safe
-plain-text excerpt with an optional configurable source link. The normal source
-attribution setting is applied afterward, and dry run uses the same final
-composition path as publication.
+- Import every available entry
+- Import only the most recent entry
+- Import a bounded number of recent entries
+- Mark the current backlog as seen and begin with future entries
 
-Feed media handling recognizes RSS enclosures, Media RSS content and thumbnails,
-and Atom enclosure links. A feed can ignore them, append safe ordinary links, or
-hotlink images with MyBB's `[img]` code; videos and unknown files always remain
-normal links. At most 10 distinct HTTP/HTTPS media URLs are retained per entry.
-Feed Publisher does not download attachments, inspect remote media, create local
-files, or insert iframe/embed HTML, so there is no plugin-owned media cleanup.
+Duplicate detection defaults to normalized GUID/link identity. Feeds with
+missing or unstable identifiers can instead use normalized title, normalized
+content, or conservative title-plus-content fingerprints.
 
-Each feed can publish automatically or require administrator approval. Approval
-mode stores the already-fetched, cleaned entry as **Awaiting approval** and the
-scheduled publisher ignores it. **Review queue** shows the prepared and final
-composed output without another remote request. An authorized administrator can
-approve the original, edit the prepared title/body and approve, defer review for
-24 hours, or reject it permanently. Approved entries return to normal pacing
-and publication validation; rejected identities remain recorded for deduplication.
+- Title matching can merge unrelated entries that share a headline.
+- Content matching treats meaningful edits as new entries.
+- Title-plus-content avoids more false matches but does not recognize edited
+  copies.
 
-The **Import / export** tab downloads a standards-compatible OPML feed list or a
-versioned JSON backup of Feed Publisher settings. Imports accept either format
-up to 256 KiB and 500 feeds, then show a no-write preview of new, existing,
-duplicate, invalid, and unsupported entries. Import never fetches feed URLs.
-Full configuration restores match each feed's saved forum name and posting
-username to safe local IDs; exported IDs are never trusted. Optional fallback
-targets cover OPML and renamed, missing, or ambiguous names. Every resolved
-forum/user pair is permission checked independently, native prefix IDs are reset,
-and unsafe or unresolved entries are skipped. Feeds start disabled unless
-preserving exported enabled states is explicitly selected. Queue/history records
-and operational logs are not exported, and no credential, cookie, token, or
-secret fields are defined or included.
+Changing the identity strategy requires an explicit queue/import-history reset
+and can make previously published source entries eligible again.
 
-Optional linked full-article retrieval can replace short feed summaries with the
-main content from the entry's public article URL. It is disabled by default and
-can run only below a configurable feed-text threshold or for every new entry.
-Article requests reuse Feed Publisher's DNS pinning, private-address blocking,
-TLS verification, no-redirect policy, 15-second timeout, HTML MIME validation,
-and 2 MiB response limit. Extraction is deterministic and dependency-free: DOM
-removes executable/navigation elements, scores explicit article/main containers,
-requires substantial content, resolves relative links, and then sends the result
-through the normal cleanup and MyCode pipeline. Failures can retain feed content,
-mark the entry seen, or fail discovery for retry. A 1-10 request-per-run bound
-defers overflow without losing it, and dry run reports the exact content source.
+## Entry Eligibility
 
-Thread dates can use the time Feed Publisher posts to MyBB or a valid source
-publication time. Future-dated entries can be held, published using the current
-time, marked as seen, or permanently rejected. Source dates before 1980 or more
-than one year ahead are treated as invalid and safely fall back to MyBB posting
-time. An optional deterministic spread of up to 60 minutes can stagger newly
-queued entries without bypassing normal publication pacing.
+Per-feed rules can include or exclude entries by title, source URL, category or
+tag, and body content. Rules support plain case-insensitive substrings or bounded
+regular expressions.
 
-Each feed is limited to 1,000 active queued, processing, or failed entries.
-Published queue rows are retained for 90 days; the permanent imported-item
-record remains for deduplication. If a task is interrupted after reserving an
-item, the entry is marked **uncertain** instead of being automatically published
-again. Review the destination forum before manually resolving such an entry.
+Optional checks can also require a source-age range, non-empty body, or image or
+media metadata. Eligibility runs before initial-policy selection and queue
+staging, and dry run reports the exact decision.
 
-The **Operations** action beside each saved feed can run discovery immediately,
-publish the next bounded batch, retry failures, pause or resume publishing,
-reset fetch backoff, clear eligible queue rows, and resolve uncertain outcomes.
-State-changing maintenance and recovery actions require confirmation and are
-recorded in MyBB's administrator log.
+Filtered and initially skipped identities are stored independently from
+removable queue history. Changing filters requires explicit re-evaluation and
+resets only previous filter rejections.
 
-The **Diagnostics** tab reports PHP/MyBB/plugin versions, required extensions,
-scheduled-task timing, per-feed checks/backoff/errors/queues, and recent bounded
-events. Its optional diagnostic run fetches and parses at most 10 feeds without
-changing feed, queue, cleanup, reconciliation, or publication state. The
-copyable support report excludes usernames, secrets, content, and response
-bodies; feed URLs are omitted unless explicitly requested.
+## Cleanup and Conversion
 
-On DirectAdmin, create a temporary protected PHP information page or use a
-small extension check to confirm `curl`, `dom`, `libxml`, and `SimpleXML`; remove
-the page afterward because full PHP information exposes server details. If the
-Feed Publisher task is disabled or overdue, enable **Feed Publisher imports**
-under **Admin CP -> Tools & Maintenance -> Task Manager**, confirm MyBB's task
-runner is being triggered, and use Diagnostics to compare its next and last run.
+Source HTML is cleaned before deterministic HTML-to-MyCode conversion. A feed
+can remove common byline/source blocks and define:
+
+- Up to 50 simple element selectors
+- Up to 20 validated removal-only regular expressions
+
+Supported selectors are `tag`, `.class`, `#id`, `tag.class`, `[attribute]`, and
+`tag[attribute]`, with one selector per line. Preview shows the resulting cleaned
+MyCode.
+
+## Post Composition
+
+Each feed can configure:
+
+- Plain title text such as `[RSS]`
+- A native MyBB thread prefix available to the forum and posting user
+- Optional MyCode header and footer templates
+- A word-safe body character limit
+- Optional continuation text and source link
+- Source attribution behavior
+
+Header and footer templates accept only `{title}`, `{source_url}`, `{feed_name}`,
+`{author}`, and `{published_date}`. Feed values are escaped before substitution;
+templates never execute PHP or raw HTML. Prefix eligibility is checked again at
+publication time.
+
+## Media
+
+Feed Publisher recognizes RSS enclosures, Media RSS content and thumbnails, and
+Atom enclosure links. Each feed can ignore media, append safe ordinary links, or
+hotlink images with MyBB's `[img]` code. Videos and unknown file types remain
+ordinary links.
+
+At most 10 distinct HTTP/HTTPS media URLs are retained per entry. The plugin
+does not download attachments, inspect remote files, create local media, or emit
+iframe/embed HTML.
+
+## Linked Full Articles
+
+Optional linked full-article retrieval can replace short feed summaries with
+content extracted from the public article URL. It is disabled by default and
+can run when feed text is below a configurable threshold (600 characters by
+default) or for every new entry.
+
+Article extraction:
+
+- Reuses DNS pinning, private-address blocking, TLS verification, and the
+  no-redirect policy
+- Uses a 15-second timeout and 2 MiB response limit
+- Requires an HTML response
+- Removes executable and navigation elements
+- Scores article/main containers and requires substantial content
+- Resolves relative links before normal cleanup and MyCode conversion
+
+Failure can retain the feed content, mark the entry seen, or fail discovery for
+retry. A configurable limit of 1-10 article requests per run defers overflow
+without losing entries.
+
+## Thread Dates
+
+Threads can use the MyBB publication time or a valid source publication time.
+Future-dated entries can be held, published with the current time, marked seen,
+or permanently rejected. Dates before 1980 or more than one year in the future
+are treated as invalid and fall back to MyBB publication time.
+
+An optional deterministic spread of up to 60 minutes can stagger newly queued
+entries without bypassing publication pacing.
+
+## Approval Workflow
+
+A feed can publish automatically or require administrator approval. Approval
+mode stores cleaned entries as **Awaiting approval**, outside scheduled
+publication.
+
+The **Review queue** displays the stored prepared and final output without
+another remote request. Authorized administrators can:
+
+- Approve the original entry
+- Edit the prepared title/body and approve
+- Defer review for 24 hours
+- Reject the entry permanently
+
+Approved entries return to normal pacing and publication validation. Rejected
+identities remain recorded for duplicate detection.
+
+## Operations and Diagnostics
+
+The **Operations** action for a saved feed can run discovery, publish the next
+bounded batch, retry failures, pause or resume publishing, reset fetch backoff,
+clear eligible queue rows, and resolve uncertain publication outcomes.
+State-changing actions require confirmation and are recorded in MyBB's
+administrator log.
+
+The **Diagnostics** tab reports plugin, MyBB, PHP, extension, scheduled-task,
+feed, queue, retry, and recent-event health. Its optional diagnostic run fetches
+and parses at most 10 feeds without changing queue or publication state.
+
+The copyable support report excludes usernames, secrets, content, and response
+bodies. Feed URLs are omitted unless explicitly requested.
+
+## Import and Export
+
+The **Import / export** tab provides standards-compatible OPML feed-list export,
+versioned JSON configuration backup, and a no-write import preview.
+
+Imports accept up to 256 KiB and 500 feeds and never fetch feed URLs. Full JSON
+restores match saved forum names and posting usernames to safe local IDs;
+exported numeric IDs are never trusted. Optional fallback targets handle OPML
+and renamed, missing, or ambiguous local names.
+
+Every resolved forum/user pair is permission checked. Native prefix IDs are
+reset, unsafe entries are skipped, and feeds start disabled unless preserving
+their exported enabled state is explicitly selected. Queue/history records,
+operational logs, and credentials are not exported.
+
+## Retention and Recovery
+
+Terminal queue history has configurable age and per-state count limits. Cleanup
+processes at most 100 records at a time. Published queue rows are retained for
+90 days by default.
+
+Imported-item duplicate history is retained indefinitely by default. Age-based
+pruning requires explicit risk confirmation because an old source entry can
+become eligible again.
+
+Optional strict source reconciliation rejects only unpublished queued entries
+missing from a successful, non-empty scan. It is suppressed when the source
+entry count unexpectedly shrinks. Retention and reconciliation never delete or
+modify published MyBB threads or posts.
+
+If a task stops after reserving an item, the entry becomes **uncertain** rather
+than being published automatically again. Review the destination forum before
+resolving it through Operations.
+
+Failed discovery uses persistent exponential backoff from five minutes up to
+six hours.
 
 ## Security model
 
-Feed content is converted to MyCode rather than posted as trusted HTML. Feed
-URLs must use HTTP or HTTPS. Requests to loopback, private, reserved, and
-link-local IP addresses are rejected to reduce SSRF risk. The validated address
-is pinned for the connection, redirects are rejected, XML response types are
-required, and responses are capped at 2 MiB. Failed discovery uses persistent
-exponential backoff from 5 minutes up to 6 hours.
+- Feed content is converted to MyCode instead of trusted HTML.
+- Feed and article URLs must use HTTP or HTTPS.
+- Loopback, private, reserved, and link-local addresses are rejected.
+- Validated DNS addresses are pinned for the connection.
+- Redirects are rejected.
+- Feed responses are limited to 2 MiB.
+- XML response types are required, with a bounded XML-sniffing fallback for
+  incorrectly labeled feeds.
+- Configuration actions use MyBB permissions, post-key protection, confirmation,
+  and administrator logging where applicable.
 
-## Testing
+## Troubleshooting
 
-Run `./tests/lint.sh` from the repository root. PHP DOM and SimpleXML are needed
-for the parser and sanitizer fixtures; missing extensions are shown as skipped
-tests. Stable releases also follow [the release checklist](docs/RELEASE_CHECKLIST.md)
-on a real MyBB installation.
+If imports are not running:
+
+1. Open **Admin CP -> Tools & Maintenance -> Task Manager**.
+2. Confirm **Feed Publisher imports** is enabled.
+3. Confirm MyBB's task runner is being triggered.
+4. Compare the task's last and next run times in **Diagnostics**.
+5. Use **Test connection** or a diagnostic run to isolate fetch/parse failures.
+
+On DirectAdmin, verify the required PHP extensions with a protected temporary
+PHP information page or a minimal extension check. Remove full PHP information
+pages immediately after use because they expose server details.
 
 ## Known limitations
 
-- Feed redirects are rejected rather than followed.
-- Feed responses are limited to 2 MiB. Incorrect content-type headers are
-  tolerated only when the bounded response begins as a supported XML feed;
-  HTML and unsupported XML remain rejected.
+- Feed and article redirects are rejected rather than followed.
+- Feed and article responses are limited to 2 MiB.
 - Supported source encodings are UTF-8, BOM-marked UTF-16, ISO-8859-1, and
   Windows-1252. Conflicting HTTP, BOM, and XML declarations are rejected.
-- Remote media attachments, full-article extraction, moderation, and AI cleanup
-  are not part of the current Core MVP.
-- Automated test doubles cannot replace the documented MyBB database, task,
-  permission, and end-to-end publication checks.
+- Remote attachment downloads, iframe embeds, and AI cleanup are not provided.
+- Automated test doubles do not replace real MyBB database, task, permission,
+  and end-to-end publication checks.
+
+## Testing
+
+Run:
+
+```bash
+./tests/lint.sh
+```
+
+PHP DOM and SimpleXML are needed for parser and sanitizer fixtures. Tests that
+need unavailable extensions report themselves as skipped. Stable releases also
+follow the [release checklist](docs/RELEASE_CHECKLIST.md) on a real MyBB
+installation.
 
 ## License
 
