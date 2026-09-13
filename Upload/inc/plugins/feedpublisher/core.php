@@ -294,13 +294,48 @@ function feedpublisher_test_feed_connection($url)
         foreach ($items as $item) {
             $newest = max($newest, (int) $item['published']);
         }
+        $defaults = feedpublisher_suggest_feed_defaults($parse, $items);
         return array('ok' => true, 'stage' => 'complete', 'fetch' => $fetch, 'parse' => $parse,
-            'items' => count($items), 'newest' => $newest, 'error' => '');
+            'items' => count($items), 'newest' => $newest, 'defaults' => $defaults, 'error' => '');
     } catch (Throwable $exception) {
         return array('ok' => false, 'stage' => $exception instanceof FeedPublisherException ? $exception->getStage() : 'unknown',
-            'fetch' => $fetch, 'parse' => array(), 'items' => 0, 'newest' => 0,
+            'fetch' => $fetch, 'parse' => array(), 'items' => 0, 'newest' => 0, 'defaults' => array(),
             'error' => feedpublisher_safe_log_text($exception->getMessage()));
     }
+}
+
+function feedpublisher_suggest_feed_defaults($parseMetadata, $items, $summaryThreshold = 600)
+{
+    $defaults = array(
+        'name' => isset($parseMetadata['title']) ? my_substr(trim((string) $parseMetadata['title']), 0, 150) : '',
+        'media_mode' => 'ignore',
+        'fulltext_mode' => 'disabled',
+        'media_items' => 0,
+        'media_urls' => 0,
+        'short_items' => 0,
+    );
+
+    foreach ($items as $item) {
+        $media = isset($item['media']) && is_array($item['media']) ? $item['media'] : array();
+        if ($media) {
+            ++$defaults['media_items'];
+            $defaults['media_urls'] += count($media);
+        }
+
+        $plain = trim(preg_replace('/\s+/u', ' ', strip_tags((string) (isset($item['content']) ? $item['content'] : ''))));
+        if (!empty($item['url']) && my_strlen($plain) < $summaryThreshold) {
+            ++$defaults['short_items'];
+        }
+    }
+
+    if ($defaults['media_items'] > 0) {
+        $defaults['media_mode'] = 'links';
+    }
+    if ($defaults['short_items'] > 0) {
+        $defaults['fulltext_mode'] = 'summary';
+    }
+
+    return $defaults;
 }
 
 function feedpublisher_parse($xml, $fetchMetadata = array(), &$parseMetadata = null)

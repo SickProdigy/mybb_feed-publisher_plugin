@@ -277,6 +277,21 @@ $suite->test('entry eligibility explains include, exclude, age, and content deci
     $t->assertSame(1, count($errors));
 });
 
+$suite->test('feed test suggests title, media links, and summary full text defaults', function ($t) {
+    $defaults = feedpublisher_suggest_feed_defaults(array('title' => 'Example Feed'), array(
+        array('url' => 'https://example.com/a', 'content' => '<p>Short teaser</p>', 'media' => array(
+            array('url' => 'https://example.com/image.jpg', 'kind' => 'image'),
+        )),
+        array('url' => 'https://example.com/b', 'content' => str_repeat('complete ', 100), 'media' => array()),
+    ));
+    $t->assertSame('Example Feed', $defaults['name']);
+    $t->assertSame('links', $defaults['media_mode']);
+    $t->assertSame('summary', $defaults['fulltext_mode']);
+    $t->assertSame(1, $defaults['media_items']);
+    $t->assertSame(1, $defaults['media_urls']);
+    $t->assertSame(1, $defaults['short_items']);
+});
+
 $suite->test('title prefix preserves MyBB 85-character subject limit', function ($t) {
     $subject = feedpublisher_build_subject(str_repeat('x', 100), '[RSS]');
     $t->assertSame(85, my_strlen($subject));

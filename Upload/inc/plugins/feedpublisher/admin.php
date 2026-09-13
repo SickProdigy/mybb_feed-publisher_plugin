@@ -37,6 +37,8 @@ function feedpublisher_admin_controller()
         feedpublisher_admin_preview_saved();
     } elseif ($action === 'diagnostics') {
         feedpublisher_admin_diagnostics();
+    } elseif ($action === 'queue') {
+        feedpublisher_admin_queue_status();
     } elseif ($action === 'moderate') {
         feedpublisher_admin_moderate_commit();
     } elseif ($action === 'moderation') {
@@ -79,6 +81,11 @@ function feedpublisher_admin_tabs($active)
             'title' => 'Diagnostics',
             'link' => 'index.php?module=config/feedpublisher&amp;action=diagnostics',
             'description' => 'Review runtime health, feed status, safe logs, and support details.',
+        ),
+        'queue' => array(
+            'title' => 'Queue',
+            'link' => 'index.php?module=config/feedpublisher&amp;action=queue',
+            'description' => 'Review queue counts, initial scan state, and publication pacing.',
         ),
         'moderation' => array(
             'title' => 'Review queue',
@@ -202,6 +209,56 @@ function feedpublisher_admin_diagnostics()
     $page->output_footer();
 }
 
+function feedpublisher_admin_queue_status()
+{
+    global $db, $page;
+
+    $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
+    $page->add_breadcrumb_item('Queue');
+    $page->output_header('Feed Publisher queue');
+    feedpublisher_admin_tabs('queue');
+
+    $table = new Table;
+    foreach (array('Feed', 'Active queue', 'Review / attention', 'Terminal history', 'Initial scan', 'Publication pacing', 'Controls') as $heading) {
+        $table->construct_header($heading);
+    }
+
+    $query = $db->simple_select('feedpublisher_feeds', '*', '', array('order_by' => 'name'));
+    while ($feed = $db->fetch_array($query)) {
+        $id = (int) $feed['id'];
+        $counts = feedpublisher_queue_counts($id);
+        $initialPolicy = feedpublisher_initial_policy_label($feed['initial_policy']);
+        $initialStatus = empty($feed['initialized_at'])
+            ? 'Pending'
+            : my_date('normal', (int) $feed['initialized_at']);
+        $nextPublish = (int) $feed['last_published'] > 0
+            ? (int) $feed['last_published'] + max(5, (int) $feed['publish_interval_minutes']) * 60
+            : 0;
+        $publication = !empty($feed['publishing_paused'])
+            ? '<strong>Paused</strong>'
+            : 'Active';
+        $publication .= '<br><small>Batch: ' . (int) $feed['max_posts_per_run'] . ' &middot; Order: ' . htmlspecialchars_uni($feed['queue_order']) . '</small>';
+        $publication .= '<br><small>Next eligible publication: ' . ($nextPublish > TIME_NOW ? my_date('normal', $nextPublish) : 'Now') . '</small>';
+
+        $table->construct_cell('<a id="feed-' . $id . '"></a><strong>' . htmlspecialchars_uni($feed['name']) . '</strong><br><small>Feed #' . $id . '</small>');
+        $table->construct_cell('Queued: ' . $counts['queued'] . '<br>Processing: ' . $counts['processing']);
+        $table->construct_cell('Awaiting approval: ' . $counts['pending_approval'] . '<br>Failed: ' . $counts['failed'] . '<br>Uncertain: ' . $counts['uncertain']);
+        $table->construct_cell('Published: ' . $counts['published'] . '<br>Skipped: ' . $counts['skipped'] . '<br>Rejected: ' . $counts['rejected']);
+        $table->construct_cell($initialStatus . '<br><small>Policy: ' . htmlspecialchars_uni($initialPolicy) . '</small>');
+        $table->construct_cell($publication);
+        $table->construct_cell('<a href="index.php?module=config/feedpublisher&amp;action=operations&amp;id=' . $id . '">Operations</a>'
+            . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=preview&amp;id=' . $id . '">Preview</a>');
+        $table->construct_row();
+    }
+
+    if ($table->num_rows() === 0) {
+        $table->construct_cell('No feeds have been configured.', array('colspan' => 7));
+        $table->construct_row();
+    }
+    $table->output('Queue status');
+    $page->output_footer();
+}
+
 function feedpublisher_admin_list()
 {
     global $db, $mybb, $page;
@@ -260,13 +317,14 @@ function feedpublisher_admin_list()
 
         $id = (int) $feed['id'];
         $counts = feedpublisher_queue_counts($id);
-        $queueStatus = 'Queued: ' . $counts['queued'] . '<br>Awaiting approval: ' . $counts['pending_approval'] . '<br>Processing: ' . $counts['processing']
-            . '<br>Published: ' . $counts['published'] . '<br>Skipped: ' . $counts['skipped']
-            . '<br>Failed: ' . $counts['failed'] . '<br>Uncertain: ' . $counts['uncertain']
-            . '<br>Rejected: ' . $counts['rejected'];
+        $active = $counts['queued'] + $counts['pending_approval'] + $counts['processing'];
+        $attention = $counts['failed'] + $counts['uncertain'];
+        $queueStatus = 'Active: ' . $active . ($attention ? '<br><strong style="color:#a00">Needs attention: ' . $attention . '</strong>' : '')
+            . '<br><a href="index.php?module=config/feedpublisher&amp;action=queue#feed-' . $id . '">Queue details</a>';
         $initialStatus = empty($feed['initialized_at'])
-            ? 'Initial scan pending (' . htmlspecialchars_uni($feed['initial_policy']) . ')'
-            : 'Initial scan: ' . my_date('relative', (int) $feed['initialized_at']) . ' (' . htmlspecialchars_uni($feed['initial_policy']) . ')';
+            ? 'Initial scan pending'
+            : 'Initial scan: ' . my_date('relative', (int) $feed['initialized_at']);
+        $initialStatus .= '<br><small>Initial policy: ' . htmlspecialchars_uni(feedpublisher_initial_policy_label($feed['initial_policy'])) . '</small>';
         $controls = '<a href="index.php?module=config/feedpublisher&amp;action=edit&amp;id=' . $id . '">Edit</a>'
             . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=preview&amp;id=' . $id . '">Preview</a>'
             . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=operations&amp;id=' . $id . '">Operations</a>'
@@ -289,6 +347,17 @@ function feedpublisher_admin_list()
 
     $table->output('Configured feeds');
     $page->output_footer();
+}
+
+function feedpublisher_initial_policy_label($policy)
+{
+    $labels = array(
+        'all' => 'All available entries',
+        'latest' => 'Most recent only',
+        'recent' => 'Recent count',
+        'start_now' => 'Start now',
+    );
+    return isset($labels[$policy]) ? $labels[$policy] : $policy;
 }
 
 function feedpublisher_admin_sort_link($label, $column, $activeSort, $activeDirection)
@@ -346,7 +415,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'fulltext_fallback' => 'feed',
         'fulltext_summary_chars' => 600,
         'fulltext_max_per_run' => 3,
-        'enabled' => 0,
+        'enabled' => 1,
         'interval_minutes' => 60,
         'publish_interval_minutes' => 60,
         'max_posts_per_run' => 1,
@@ -366,6 +435,17 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'strip_selectors' => '',
         'strip_regexes' => '',
     ), $values);
+    if ($mybb->get_input('feed_name') !== '') {
+        $values['name'] = my_substr(trim($mybb->get_input('feed_name')), 0, 150);
+    }
+    $suggestedMediaMode = $mybb->get_input('feed_media_mode');
+    if (in_array($suggestedMediaMode, array('ignore', 'links', 'hotlink'), true)) {
+        $values['media_mode'] = $suggestedMediaMode;
+    }
+    $suggestedFulltextMode = $mybb->get_input('feed_fulltext_mode');
+    if (in_array($suggestedFulltextMode, array('disabled', 'summary', 'always'), true)) {
+        $values['fulltext_mode'] = $suggestedFulltextMode;
+    }
 
     $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
     $page->add_breadcrumb_item($action === 'edit' ? 'Edit feed' : 'Add feed');
@@ -401,7 +481,10 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     echo $form->generate_hidden_field('id', (int) $values['id']);
     $container = new FormContainer($action === 'edit' ? 'Edit feed' : 'Add feed');
     $container->output_row('Name', 'A descriptive name shown in the Admin CP and task logs. Leave blank to generate one from the feed URL.', $form->generate_text_box('name', $values['name']));
-    $container->output_row('Feed or website URL <em>*</em>', 'Enter an exact public RSS/Atom URL, or enter a normal website URL and use Find feeds.', $form->generate_text_box('url', $values['url']));
+    $container->output_row('Feed or website URL <em>*</em>', 'Enter an exact public RSS/Atom URL, or enter a normal website URL and use Find feeds.',
+        $form->generate_text_box('url', $values['url'])
+        . ' ' . $form->generate_submit_button('Test connection', array('name' => 'test_connection'))
+        . ' ' . $form->generate_submit_button('Find feeds', array('name' => 'find_feeds')));
     $refresh = "this.form.elements['refresh_prefixes'].click();";
     $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum. Changing it refreshes the available MyBB prefixes.', $form->generate_select_box('fid', $forums, (int) $values['fid'], array('onchange' => $refresh)));
     $container->output_row('Posting user <em>*</em>', 'The MyBB account used as the post author. Changing it refreshes the prefixes this user may apply.', $form->generate_select_box('uid', $users, (int) $values['uid'], array('onchange' => $refresh)));
@@ -474,9 +557,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $container->end();
     $form->output_submit_wrapper(array(
         $form->generate_submit_button($action === 'edit' ? 'Save feed' : 'Add feed', array('name' => 'save_feed')),
-        $form->generate_submit_button('Preview / dry run', array('name' => 'preview_initial')),
-        $form->generate_submit_button('Test connection', array('name' => 'test_connection')),
-        $form->generate_submit_button('Find feeds', array('name' => 'find_feeds'))
+        $form->generate_submit_button('Preview / dry run', array('name' => 'preview_initial'))
     ));
     $form->end();
     $page->output_footer();
@@ -506,6 +587,7 @@ function feedpublisher_admin_connection_results($values, $candidates, $pageMetad
             $result = feedpublisher_test_feed_connection($candidate['url']);
             $fetch = $result['fetch'];
             $parse = $result['parse'];
+            $defaults = isset($result['defaults']) ? $result['defaults'] : array();
             $title = !empty($parse['title']) ? $parse['title'] : (!empty($candidate['declared_title']) ? $candidate['declared_title'] : 'Untitled feed');
             $table->construct_cell('<strong>' . htmlspecialchars_uni($title) . '</strong><br><small>' . htmlspecialchars_uni($candidate['url']) . '</small>');
             $connection = ($result['ok'] ? '<span style="color:#287b31">Success</span>' : '<span style="color:#a00">Failed at ' . htmlspecialchars_uni($result['stage']) . '</span>')
@@ -516,11 +598,19 @@ function feedpublisher_admin_connection_results($values, $candidates, $pageMetad
                 $connection .= '<br><small>' . htmlspecialchars_uni($result['error']) . '</small>';
             }
             $table->construct_cell($connection);
-            $table->construct_cell($result['ok'] ? htmlspecialchars_uni($parse['format']) . '<br><small>' . htmlspecialchars_uni($parse['encoding']) . '</small>' : 'Not parsed');
+            $detected = $result['ok'] ? htmlspecialchars_uni($parse['format']) . '<br><small>' . htmlspecialchars_uni($parse['encoding']) . '</small>' : 'Not parsed';
+            if ($result['ok']) {
+                $detected .= '<br><small>Media: ' . ((int) $defaults['media_urls'] > 0 ? (int) $defaults['media_urls'] . ' URLs in ' . (int) $defaults['media_items'] . ' entries' : 'none detected') . '</small>';
+                $detected .= '<br><small>Full article: ' . ((int) $defaults['short_items'] > 0 ? 'summary-only candidates detected' : 'not suggested') . '</small>';
+            }
+            $table->construct_cell($detected);
             $newest = $result['newest'] ? my_date('normal', $result['newest']) : 'No valid source date';
             $table->construct_cell($result['ok'] ? (int) $result['items'] . '<br><small>Newest: ' . $newest . '</small>' : '&mdash;');
             $useUrl = 'index.php?module=config/feedpublisher&amp;action=' . (!empty($values['id']) ? 'edit&amp;id=' . (int) $values['id'] : 'add')
-                . '&amp;feed_url=' . rawurlencode($candidate['url']);
+                . '&amp;feed_url=' . rawurlencode($candidate['url'])
+                . '&amp;feed_name=' . rawurlencode(!empty($defaults['name']) ? $defaults['name'] : $title)
+                . '&amp;feed_media_mode=' . rawurlencode(!empty($defaults['media_mode']) ? $defaults['media_mode'] : 'ignore')
+                . '&amp;feed_fulltext_mode=' . rawurlencode(!empty($defaults['fulltext_mode']) ? $defaults['fulltext_mode'] : 'disabled');
             $table->construct_cell($result['ok'] ? '<a class="button" href="' . $useUrl . '">Use this feed</a>' : 'Unavailable');
             $table->construct_row();
         }

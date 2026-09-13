@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.1.31 - 2026-09-13
 
+- Let connection-test and feed-discovery results apply detected feed defaults
+  back to the add/edit form, including feed title, media-link handling, and
+  summary-only linked full-article retrieval.
+- Enable new feed configurations by default.
+- Add a dedicated Queue tab for per-feed active, review, attention, terminal,
+  initial-scan, and publication-pacing status.
 - Reorganize the README into task-focused setup, workflow, configuration,
   operations, security, and troubleshooting sections.
 - Correct stale limitations that still described full-article retrieval and

@@ -4,7 +4,7 @@ Feed Publisher imports RSS, RDF, and Atom entries as MyBB threads. It uses
 MyBB's post data handler, converts remote HTML to safe MyCode, and does not
 require raw HTML to be enabled in posts.
 
-> **Status:** Development preview (`0.1.30`). Test upgrades and feed behavior on
+> **Status:** Development preview (`0.1.31`). Test upgrades and feed behavior on
 > a non-production MyBB installation before deployment.
 
 ## Highlights
@@ -37,7 +37,7 @@ require raw HTML to be enabled in posts.
 
 New installations enable the scheduled task automatically. It runs every five
 minutes, but each feed is fetched and published only when its own intervals are
-due.
+due. New feed configurations are enabled by default.
 
 ## How Publishing Works
 
@@ -62,6 +62,10 @@ posting user, fetch interval, status, or last result.
 Feed names remain editable. When Name is left blank, Feed Publisher generates a
 readable name from the URL host and useful path parts.
 
+The **Queue** tab shows per-feed active, review, attention, and terminal queue
+counts along with initial-scan policy and publication pacing. The feeds list
+keeps compact queue totals and links to the detailed row.
+
 ### Finding and Testing Feeds
 
 Use **Find feeds** when you know a website address but not its feed endpoint. It
@@ -71,7 +75,10 @@ not crawl the website.
 Use **Test connection** to validate an exact endpoint without saving, queueing,
 or publishing anything. The result includes safe fetch metadata, detected feed
 format and encoding, item count, and newest valid source date. Response bodies
-are never displayed.
+are never displayed. Successful test and discovery results can apply detected
+defaults back to the feed form: the parsed feed title, media-link handling when
+feed media is present, and summary-only linked full-article retrieval when feed
+entries look like short teasers.
 
 Use **Preview** to run the production fetch, parse, cleanup, conversion, and
 composition path without writing plugin or forum data. Preview also reports
