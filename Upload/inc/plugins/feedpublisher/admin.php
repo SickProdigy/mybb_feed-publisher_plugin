@@ -474,9 +474,9 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         'eligibility_rules' => '',
         'minimum_source_age_hours' => 0,
         'maximum_source_age_days' => 0,
-        'require_entry_body' => 0,
+        'require_entry_body' => 1,
         'require_entry_media' => 0,
-        'media_mode' => 'hotlink',
+        'media_mode' => 'ignore',
         'publication_mode' => 'automatic',
         'fulltext_mode' => 'disabled',
         'fulltext_fallback' => 'feed',
@@ -597,10 +597,10 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         'Minimum age (hours): ' . $form->generate_numeric_field('minimum_source_age_hours', (int) $values['minimum_source_age_hours'], array('min' => 0, 'max' => 8760))
         . ' &nbsp; Maximum age (days): ' . $form->generate_numeric_field('maximum_source_age_days', (int) $values['maximum_source_age_days'], array('min' => 0, 'max' => 3650)));
     $container->output_row('Required entry content', 'Reject entries before queueing when required source content is absent.',
-        $form->generate_check_box('require_entry_body', 1, 'Require a non-empty body', array('checked' => !empty($values['require_entry_body']))) . '<br>'
+        $form->generate_check_box('require_entry_body', 1, 'Require body text', array('checked' => !empty($values['require_entry_body']))) . '<br>'
         . $form->generate_check_box('require_entry_media', 1, 'Require an image, enclosure, or Media RSS item', array('checked' => !empty($values['require_entry_media']))));
-    $container->output_row('Feed media', 'Handle up to 10 safe HTTP/HTTPS enclosure, Media RSS, thumbnail, or Atom enclosure URLs per entry. Images can be hotlinked; videos and other files always become ordinary links. No files are downloaded and no embeds or iframes are created.',
-        $form->generate_select_box('media_mode', array('ignore' => 'Ignore feed media (default)', 'links' => 'Add safe media links', 'hotlink' => 'Show images; link videos and files'), $values['media_mode']));
+    $container->output_row('Extra feed media', 'Optional enclosure, Media RSS, thumbnail, or Atom enclosure URLs outside the entry body. Body images and links are still converted normally. Extra images can be shown; videos and other files become ordinary links. No files are downloaded and no embeds or iframes are created.',
+        $form->generate_select_box('media_mode', array('ignore' => 'Do not append extra media (default)', 'links' => 'Append extra media links', 'hotlink' => 'Append images; link videos and files'), $values['media_mode']));
     $container->output_row('Publication mode', 'Automatic creates threads according to the normal schedule. Require approval prepares and stores new entries without publishing until an administrator approves them in Review queue.',
         $form->generate_select_box('publication_mode', array('automatic' => 'Publish automatically', 'approval' => 'Require administrator approval'), $values['publication_mode']));
     $container->output_row('Linked full article', 'Disabled keeps feed content. Summary-only mode visits the linked page only when the feed body is shorter than the threshold. Always attempts the linked page for every new publishable entry. Requests use the same public-address, DNS pinning, TLS, redirect, timeout, MIME, and 2 MiB limits as feed fetching.',
@@ -939,7 +939,9 @@ function feedpublisher_admin_save()
     if (!in_array($values['initial_policy'], array('all', 'latest', 'recent', 'start_now'), true)) {
         $errors[] = 'Select a valid initial import policy.';
     }
-    if ($values['initial_limit'] < 1 || $values['initial_limit'] > 100) {
+    if ($values['initial_policy'] !== 'recent') {
+        $values['initial_limit'] = 1;
+    } elseif ($values['initial_limit'] < 1 || $values['initial_limit'] > 100) {
         $errors[] = 'The initial recent count must be between 1 and 100.';
     }
     if (!in_array($values['queue_order'], array('oldest', 'newest'), true)) {

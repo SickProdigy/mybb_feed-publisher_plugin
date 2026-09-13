@@ -329,7 +329,7 @@ function feedpublisher_suggest_feed_defaults($parseMetadata, $items, $summaryThr
     }
 
     if ($defaults['media_items'] > 0) {
-        $defaults['media_mode'] = 'hotlink';
+        $defaults['media_mode'] = 'ignore';
     }
     if ($defaults['short_items'] > 0) {
         $defaults['fulltext_mode'] = 'summary';
@@ -771,7 +771,7 @@ function feedpublisher_entry_eligibility($feed, $item, $now = null)
 {
     $now = $now === null ? TIME_NOW : (int) $now;
     if (!empty($feed['require_entry_body']) && trim(strip_tags((string) $item['content'])) === '') {
-        return array('eligible' => false, 'reason' => 'Required body content is missing.');
+        return array('eligible' => false, 'reason' => 'Required body text is missing.');
     }
     if (!empty($feed['require_entry_media']) && empty($item['has_media'])) {
         return array('eligible' => false, 'reason' => 'Required image or media item is missing.');

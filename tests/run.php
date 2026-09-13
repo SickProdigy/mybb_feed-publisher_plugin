@@ -273,11 +273,13 @@ $suite->test('entry eligibility explains include, exclude, age, and content deci
     $t->assertContains('exclude title: sponsored', $blockedResult['reason']);
     $missingMedia = $item; $missingMedia['has_media'] = false;
     $t->assertContains('media', feedpublisher_entry_eligibility($feed, $missingMedia)['reason']);
+    $imageOnly = $item; $imageOnly['content'] = '<img src="https://example.com/image.jpg" alt="">';
+    $t->assertContains('body text', feedpublisher_entry_eligibility($feed, $imageOnly)['reason']);
     $errors = array(); feedpublisher_eligibility_rules('include-regex title: ~[~', $errors);
     $t->assertSame(1, count($errors));
 });
 
-$suite->test('feed test suggests title, media links, and summary full text defaults', function ($t) {
+$suite->test('feed test suggests title and summary full text defaults', function ($t) {
     $defaults = feedpublisher_suggest_feed_defaults(array('title' => 'Example Feed'), array(
         array('url' => 'https://example.com/a', 'content' => '<p>Short teaser</p>', 'media' => array(
             array('url' => 'https://example.com/image.jpg', 'kind' => 'image'),
@@ -285,7 +287,7 @@ $suite->test('feed test suggests title, media links, and summary full text defau
         array('url' => 'https://example.com/b', 'content' => str_repeat('complete ', 100), 'media' => array()),
     ));
     $t->assertSame('Example Feed', $defaults['name']);
-    $t->assertSame('hotlink', $defaults['media_mode']);
+    $t->assertSame('ignore', $defaults['media_mode']);
     $t->assertSame('summary', $defaults['fulltext_mode']);
     $t->assertSame(1, $defaults['media_items']);
     $t->assertSame(1, $defaults['media_urls']);
@@ -409,6 +411,44 @@ $suite->test('full-text extraction selects article content and resolves safe rel
     $t->assertTrue($metadata['text_characters'] >= 200);
     $latin = "<p>Caf\xE9 article</p>";
     $t->assertContains('Caf' . "\xC3\xA9", feedpublisher_fulltext_normalize_encoding($latin, 'ISO-8859-1'));
+});
+
+$suite->test('full-text extraction removes image lightbox controls without dropping article media', function ($t) {
+    if (!extension_loaded('dom')) { $t->skip('PHP DOM is not installed.'); }
+    $html = '<html><body><article><h1>Story</h1>'
+        . '<p>This article starts with enough useful words to be selected as the main story content without depending on unrelated page furniture or navigation blocks.</p>'
+        . '<figure><img src="/image.jpg" alt="Cast member"><a href="/image.jpg">View and download image</a><button>Download the image</button><button>close</button><a href="/image.jpg">Download this image</a></figure>'
+        . '<p>This second paragraph keeps the article substantial and includes a legitimate <a href="/download">download here</a> link that should remain available.</p>'
+        . '</article></body></html>';
+    $metadata = array();
+    $article = feedpublisher_fulltext_extract($html, 'https://example.com/news/story.html', $metadata);
+    $t->assertContains('https://example.com/image.jpg', $article);
+    $t->assertContains('download here', $article);
+    $t->assertNotContains('View and download image', $article);
+    $t->assertNotContains('Download the image', $article);
+    $t->assertNotContains('Download this image', $article);
+    $t->assertNotContains('>close<', strtolower($article));
+});
+
+$suite->test('full-text extraction removes common article chrome while preserving real links', function ($t) {
+    if (!extension_loaded('dom')) { $t->skip('PHP DOM is not installed.'); }
+    $html = '<html><body><main><article><h1>Story</h1>'
+        . '<p>This article begins with a useful paragraph that should remain because it explains the story in normal prose for readers and has enough words to be clearly article content.</p>'
+        . '<div class="share-tools"><a href="/share">Share this article</a><button>Copy link</button></div>'
+        . '<p>This second paragraph includes an ordinary <a href="/source">source link</a> and should not be damaged by cleanup of social widgets or ad placeholders.</p>'
+        . '<div id="newsletter-signup">Subscribe for more stories</div><div class="advertisement">Advertisement</div>'
+        . '<h2>Filed under</h2><p>Tags that should not become part of the imported article.</p><h2>Keep reading</h2><p>Related links should be omitted.</p>'
+        . '</article></main></body></html>';
+    $metadata = array();
+    $article = feedpublisher_fulltext_extract($html, 'https://example.com/news/story.html', $metadata);
+    $t->assertContains('useful paragraph', $article);
+    $t->assertContains('https://example.com/source', $article);
+    $t->assertNotContains('Share this article', $article);
+    $t->assertNotContains('Copy link', $article);
+    $t->assertNotContains('Subscribe for more stories', $article);
+    $t->assertNotContains('Advertisement', $article);
+    $t->assertNotContains('Filed under', $article);
+    $t->assertNotContains('Related links should be omitted', $article);
 });
 
 $suite->test('future-date policies and dateline fallback', function ($t) {
@@ -547,12 +587,15 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("drop_table('feedpublisher_logs')", $source);
     $t->assertContains("delete_query('tasks'", $source);
     $t->assertContains("'enabled' => 1", $source);
+    $t->assertContains("`require_entry_body` tinyint(1) NOT NULL DEFAULT 1", $source);
+    $t->assertContains("'require_entry_body' => 1", $adminSource);
     $t->assertContains("fetch_next_run", $source);
     $t->assertContains("(int) \$existing['nextrun'] < TIME_NOW", $source);
     $t->assertContains("feedpublisher_reschedule_task", $adminSource);
     $t->assertContains("feedpublisher_admin_next_post_time", $adminSource);
     $t->assertContains("feedpublisher_admin_recent_publication_error", $adminSource);
     $t->assertContains("Automatic retry scheduled", $adminSource);
+    $t->assertContains("\$values['initial_policy'] !== 'recent'", $adminSource);
     $t->assertContains("feedpublisher_prepare_publication_request_context", $publisherSource);
     $t->assertContains("\$_SERVER['REMOTE_ADDR'] = '127.0.0.1'", $publisherSource);
     $t->assertContains("'url' => 'f.url'", $adminSource);

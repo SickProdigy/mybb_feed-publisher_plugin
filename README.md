@@ -4,7 +4,7 @@ Feed Publisher imports RSS, RDF, and Atom entries as MyBB threads. It uses
 MyBB's post data handler, converts remote HTML to safe MyCode, and does not
 require raw HTML to be enabled in posts.
 
-> **Status:** Development preview (`0.1.32`). Test upgrades and feed behavior on
+> **Status:** Development preview (`0.1.33`). Test upgrades and feed behavior on
 > a non-production MyBB installation before deployment.
 
 ## Highlights
@@ -78,10 +78,9 @@ Use **Test connection** to validate an exact endpoint without saving, queueing,
 or publishing anything. The result includes safe fetch metadata, detected feed
 format and encoding, item count, and newest valid source date. Response bodies
 are never displayed. Successful tests apply detected defaults on the same form:
-the parsed feed title, image display with video/file links when feed media is
-present, and summary-only linked full-article retrieval when feed entries look
-like short teasers. If the result says full-article retrieval is not needed, it
-is not automatically selected.
+the parsed feed title and summary-only linked full-article retrieval when feed
+entries look like short teasers. If the result says full-article retrieval is
+not needed, it is not automatically selected.
 
 Use **Preview** to run the production fetch, parse, cleanup, conversion, and
 composition path without writing plugin or forum data. Preview also reports
@@ -114,9 +113,11 @@ Per-feed rules can include or exclude entries by title, source URL, category or
 tag, and body content. Rules support plain case-insensitive substrings or bounded
 regular expressions.
 
-Optional checks can also require a source-age range, non-empty body, or image or
-media metadata. Eligibility runs before initial-policy selection and queue
-staging, and dry run reports the exact decision.
+Optional checks can also require a source-age range, body text, or image or
+media metadata. The body-text check looks for text after HTML tags are removed,
+so image-only entries need that option disabled. Eligibility runs before
+initial-policy selection and queue staging, and dry run reports the exact
+decision.
 
 Filtered and initially skipped identities are stored independently from
 removable queue history. Changing filters requires explicit re-evaluation and
@@ -158,7 +159,9 @@ publication time.
 Feed Publisher recognizes RSS enclosures, Media RSS content and thumbnails, and
 Atom enclosure links. Each feed can ignore media, append safe ordinary links, or
 hotlink images with MyBB's `[img]` code. Videos and unknown file types remain
-ordinary links. New feeds default to showing images and linking videos/files.
+ordinary links. This setting controls extra feed metadata outside the entry
+body; body images and links are converted normally. New feeds default to not
+appending extra media.
 
 At most 10 distinct HTTP/HTTPS media URLs are retained per entry. The plugin
 does not download attachments, inspect remote files, create local media, or emit

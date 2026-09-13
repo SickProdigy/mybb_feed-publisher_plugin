@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.33 - 2026-09-13
+
+- Validate Initial recent count only when the Recent count initial-import
+  policy is selected.
+- Rename feed media controls to Extra feed media and restore the default to not
+  appending extra media metadata; body images and links remain unaffected.
+- Enable the body-text eligibility check by default so title-only feed entries
+  are filtered unless an admin opts into allowing them; image-only entries need
+  that option disabled.
+- Remove common linked-article chrome during full-article extraction, including
+  image lightbox/download controls, share widgets, newsletter/ad blocks, and
+  trailing related/story navigation while preserving article images and ordinary
+  links.
+
 ## 0.1.32 - 2026-09-13
 
 - Calculate the Feed Publisher scheduled task's next run when creating it,
@@ -12,8 +26,6 @@
   automatically when an exact URL works or discovery finds one usable feed.
 - Put the feed URL before Name on the add/edit form and clarify full-article
   detection wording in connection results.
-- Default new feed-media handling to showing images while linking videos and
-  files; detected feed media now applies that same safer rich-media default.
 - Default new feed source attribution to none.
 - Clarify initial-import policy labels and show Initial recent count only when
   the Recent count policy is selected.
@@ -28,8 +40,8 @@
 ## 0.1.31 - 2026-09-13
 
 - Let connection-test and feed-discovery results apply detected feed defaults
-  back to the add/edit form, including feed title, media-link handling, and
-  summary-only linked full-article retrieval.
+  back to the add/edit form, including feed title and summary-only linked
+  full-article retrieval.
 - Enable new feed configurations by default.
 - Add a dedicated Queue tab for per-feed active, review, attention, terminal,
   initial-scan, and publication-pacing status.

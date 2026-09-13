@@ -71,6 +71,7 @@ function feedpublisher_fulltext_extract($html, $url, &$metadata = null)
         if ($score > $bestScore) { $best = $candidate; $bestScore = $score; }
     }
     if (!$best) throw new FeedPublisherException('fulltext', 'No sufficiently substantial article container was found.');
+    feedpublisher_fulltext_remove_article_chrome($xpath, $best);
 
     $base = $url;
     $baseNodes = $document->getElementsByTagName('base');
@@ -91,6 +92,91 @@ function feedpublisher_fulltext_extract($html, $url, &$metadata = null)
     if (trim($output) === '' || $plainLength < 200) throw new FeedPublisherException('fulltext', 'Article extraction returned insufficient content.');
     $metadata = array('selector' => strtolower($best->nodeName), 'text_characters' => $plainLength, 'html_bytes' => strlen($output));
     return $output;
+}
+
+function feedpublisher_fulltext_remove_article_chrome(DOMXPath $xpath, DOMElement $article)
+{
+    $chromePattern = '/(?:^|[-_\s])(?:ad|ads|advert|advertisement|affiliate|breadcrumb|comment|comments|newsletter|promo|promoted|recommended|related|share|sharing|social|sponsor|sponsored|subscribe|trending)(?:$|[-_\s])/i';
+    $nodes = $xpath->query('.//*[self::aside or self::div or self::section or self::ul or self::ol or self::footer or self::header or self::nav or self::form]', $article);
+    if ($nodes) {
+        for ($index = $nodes->length - 1; $index >= 0; --$index) {
+            $node = $nodes->item($index);
+            if (!$node instanceof DOMElement) {
+                continue;
+            }
+            $hint = trim($node->getAttribute('class') . ' ' . $node->getAttribute('id') . ' ' . $node->getAttribute('role') . ' ' . $node->getAttribute('aria-label'));
+            if ($hint !== '' && preg_match($chromePattern, $hint) && $node->parentNode) {
+                $node->parentNode->removeChild($node);
+            }
+        }
+    }
+
+    feedpublisher_fulltext_remove_article_tail($xpath, $article);
+
+    $labels = array(
+        'advertisement' => true,
+        'advertisements' => true,
+        'add a comment' => true,
+        'close' => true,
+        'copied!' => true,
+        'copy link' => true,
+        'view and download image' => true,
+        'download the image' => true,
+        'download this image' => true,
+        'join the conversation' => true,
+        'print' => true,
+        'share' => true,
+        'share this article' => true,
+        'show comments' => true,
+        'sign up' => true,
+        'subscribe' => true,
+    );
+    $nodes = $xpath->query('.//*[self::a or self::button or self::span or self::strong]', $article);
+    if (!$nodes) {
+        return;
+    }
+    for ($index = $nodes->length - 1; $index >= 0; --$index) {
+        $node = $nodes->item($index);
+        if (!$node instanceof DOMElement || $xpath->query('.//img', $node)->length > 0) {
+            continue;
+        }
+        $label = strtolower(trim(preg_replace('/\s+/u', ' ', $node->textContent)));
+        if (isset($labels[$label]) && $node->parentNode) {
+            $node->parentNode->removeChild($node);
+        }
+    }
+}
+
+function feedpublisher_fulltext_remove_article_tail(DOMXPath $xpath, DOMElement $article)
+{
+    $tailLabels = array('filed under' => true, 'keep reading' => true, 'latest news' => true, 'related articles' => true, 'related posts' => true, 'trending stories' => true);
+    $nodes = $xpath->query('.//*[self::h2 or self::h3 or self::h4 or self::p or self::div]', $article);
+    if (!$nodes) {
+        return;
+    }
+    foreach ($nodes as $node) {
+        if (!$node instanceof DOMElement) {
+            continue;
+        }
+        $label = strtolower(trim(preg_replace('/\s+/u', ' ', $node->textContent)));
+        if (!isset($tailLabels[$label]) || !$node->parentNode) {
+            continue;
+        }
+        $preceding = '';
+        for ($sibling = $node->previousSibling; $sibling; $sibling = $sibling->previousSibling) {
+            $preceding .= ' ' . $sibling->textContent;
+        }
+        if (my_strlen(trim(preg_replace('/\s+/u', ' ', $preceding))) < 200) {
+            continue;
+        }
+        for ($sibling = $node->nextSibling; $sibling;) {
+            $next = $sibling->nextSibling;
+            $node->parentNode->removeChild($sibling);
+            $sibling = $next;
+        }
+        $node->parentNode->removeChild($node);
+        break;
+    }
 }
 
 function feedpublisher_fulltext_item_known($feed, $item, $identity)
