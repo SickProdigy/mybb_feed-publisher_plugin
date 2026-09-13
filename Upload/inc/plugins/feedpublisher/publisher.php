@@ -35,6 +35,7 @@ function feedpublisher_publish_queued_item($feed, $item)
         throw new RuntimeException('The configured posting user is banned.');
     }
 
+    feedpublisher_prepare_publication_request_context($user);
     $permissions = forum_permissions((int) $forum['fid'], (int) $user['uid']);
     if (empty($permissions['canview']) || empty($permissions['canpostthreads'])) {
         throw new RuntimeException('The configured posting user cannot create threads in the destination forum.');
@@ -90,6 +91,28 @@ function feedpublisher_publish_queued_item($feed, $item)
         throw new RuntimeException('MyBB did not return thread and post IDs after publication.');
     }
     return $result;
+}
+
+function feedpublisher_prepare_publication_request_context($user)
+{
+    global $mybb;
+
+    if (empty($_SERVER['REMOTE_ADDR'])) {
+        $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+    }
+    if (empty($_SERVER['SERVER_ADDR'])) {
+        $_SERVER['SERVER_ADDR'] = '127.0.0.1';
+    }
+
+    if (!isset($mybb->user) || !is_array($mybb->user)) {
+        $mybb->user = array();
+    }
+    if (empty($mybb->user['uid'])) {
+        $mybb->user = $user;
+    }
+    if (!isset($mybb->usergroup) || !is_array($mybb->usergroup)) {
+        $mybb->usergroup = usergroup_permissions((int) $user['usergroup']);
+    }
 }
 
 function feedpublisher_normalize_title_prefix($prefix)

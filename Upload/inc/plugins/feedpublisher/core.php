@@ -329,7 +329,7 @@ function feedpublisher_suggest_feed_defaults($parseMetadata, $items, $summaryThr
     }
 
     if ($defaults['media_items'] > 0) {
-        $defaults['media_mode'] = 'links';
+        $defaults['media_mode'] = 'hotlink';
     }
     if ($defaults['short_items'] > 0) {
         $defaults['fulltext_mode'] = 'summary';

@@ -293,7 +293,7 @@ function feedpublisher_queue_fail($item, $message, $retryDelay = 300)
 
 function feedpublisher_queue_dispatch($feed, $publisher, $force = false)
 {
-    $result = array('published' => 0, 'failed' => 0);
+    $result = array('published' => 0, 'failed' => 0, 'errors' => array());
     foreach (feedpublisher_queue_claim_due($feed, $force) as $item) {
         if (!feedpublisher_queue_reserve($feed, $item)) {
             feedpublisher_queue_mark_uncertain($item);
@@ -309,6 +309,7 @@ function feedpublisher_queue_dispatch($feed, $publisher, $force = false)
             feedpublisher_queue_complete($feed, $item, $publication['tid'], $publication['pid']);
             ++$result['published'];
         } catch (Throwable $exception) {
+            $result['errors'][] = $exception->getMessage();
             if (is_array($publication) && !empty($publication['tid']) && !empty($publication['pid'])) {
                 feedpublisher_queue_mark_uncertain($item);
             } else {

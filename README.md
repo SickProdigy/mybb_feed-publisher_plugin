@@ -4,7 +4,7 @@ Feed Publisher imports RSS, RDF, and Atom entries as MyBB threads. It uses
 MyBB's post data handler, converts remote HTML to safe MyCode, and does not
 require raw HTML to be enabled in posts.
 
-> **Status:** Development preview (`0.1.31`). Test upgrades and feed behavior on
+> **Status:** Development preview (`0.1.32`). Test upgrades and feed behavior on
 > a non-production MyBB installation before deployment.
 
 ## Highlights
@@ -63,22 +63,25 @@ Feed names remain editable. When Name is left blank, Feed Publisher generates a
 readable name from the URL host and useful path parts.
 
 The **Queue** tab shows per-feed active, review, attention, and terminal queue
-counts along with initial-scan policy and publication pacing. The feeds list
-keeps compact queue totals and links to the detailed row.
+counts along with initial-scan policy, publication pacing, and the next queued
+post time. The feeds list keeps only compact queue totals and next-post timing.
 
 ### Finding and Testing Feeds
 
 Use **Find feeds** when you know a website address but not its feed endpoint. It
 fetches one page and lists declared RSS, RDF, and Atom alternate links. It does
-not crawl the website.
+not crawl the website. When exactly one usable feed is found, its detected
+defaults are applied to the form automatically; when several are found, choose
+one from the inline results.
 
 Use **Test connection** to validate an exact endpoint without saving, queueing,
 or publishing anything. The result includes safe fetch metadata, detected feed
 format and encoding, item count, and newest valid source date. Response bodies
-are never displayed. Successful test and discovery results can apply detected
-defaults back to the feed form: the parsed feed title, media-link handling when
-feed media is present, and summary-only linked full-article retrieval when feed
-entries look like short teasers.
+are never displayed. Successful tests apply detected defaults on the same form:
+the parsed feed title, image display with video/file links when feed media is
+present, and summary-only linked full-article retrieval when feed entries look
+like short teasers. If the result says full-article retrieval is not needed, it
+is not automatically selected.
 
 Use **Preview** to run the production fetch, parse, cleanup, conversion, and
 composition path without writing plugin or forum data. Preview also reports
@@ -89,8 +92,8 @@ existing import and queue state.
 Each feed can begin with one of four initial-import policies:
 
 - Import every available entry
-- Import only the most recent entry
-- Import a bounded number of recent entries
+- Import only the most recent entry, exactly one item
+- Import a bounded number of recent entries using **Initial recent count**
 - Mark the current backlog as seen and begin with future entries
 
 Duplicate detection defaults to normalized GUID/link identity. Feeds with
@@ -142,6 +145,9 @@ Each feed can configure:
 - Optional continuation text and source link
 - Source attribution behavior
 
+New feeds default to no separate source-attribution line. Attribution can be
+changed per feed to append a plain source link or linked source title.
+
 Header and footer templates accept only `{title}`, `{source_url}`, `{feed_name}`,
 `{author}`, and `{published_date}`. Feed values are escaped before substitution;
 templates never execute PHP or raw HTML. Prefix eligibility is checked again at
@@ -152,7 +158,7 @@ publication time.
 Feed Publisher recognizes RSS enclosures, Media RSS content and thumbnails, and
 Atom enclosure links. Each feed can ignore media, append safe ordinary links, or
 hotlink images with MyBB's `[img]` code. Videos and unknown file types remain
-ordinary links.
+ordinary links. New feeds default to showing images and linking videos/files.
 
 At most 10 distinct HTTP/HTTPS media URLs are retained per entry. The plugin
 does not download attachments, inspect remote files, create local media, or emit
@@ -217,6 +223,9 @@ administrator log.
 The **Diagnostics** tab reports plugin, MyBB, PHP, extension, scheduled-task,
 feed, queue, retry, and recent-event health. Its optional diagnostic run fetches
 and parses at most 10 feeds without changing queue or publication state.
+If the Feed Publisher task shows an overdue next run, use **Reschedule task** to
+recalculate its next run time and clear any stale lock. If it becomes overdue
+again, confirm the MyBB task runner image or cron job is actually firing.
 
 The copyable support report excludes usernames, secrets, content, and response
 bodies. Feed URLs are omitted unless explicitly requested.

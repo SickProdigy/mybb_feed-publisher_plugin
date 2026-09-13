@@ -51,6 +51,9 @@ function task_feedpublisher($task)
             $dispatch = feedpublisher_queue_dispatch($feed, 'feedpublisher_publish_queued_item');
             $totals['published'] += $dispatch['published'];
             $totals['failed'] += $dispatch['failed'];
+            foreach ($dispatch['errors'] as $error) {
+                $errors[] = feedpublisher_safe_log_text($feed['name']) . ' publication: ' . feedpublisher_safe_log_text($error);
+            }
         }
     }
 

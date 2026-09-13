@@ -105,6 +105,12 @@ function feedpublisher_admin_diagnostics()
     global $db, $mybb, $page;
 
     $runResults = array();
+    if ($mybb->request_method === 'post' && $mybb->get_input('reschedule_task', MyBB::INPUT_INT)) {
+        verify_post_check($mybb->get_input('my_post_key'));
+        $result = feedpublisher_reschedule_task();
+        flash_message($result === 'created' ? 'The Feed Publisher task was created and scheduled.' : 'The Feed Publisher task was rescheduled and unlocked.', 'success');
+        admin_redirect('index.php?module=config/feedpublisher&action=diagnostics');
+    }
     if ($mybb->request_method === 'post' && $mybb->get_input('diagnostic_run', MyBB::INPUT_INT)) {
         verify_post_check($mybb->get_input('my_post_key'));
         $query = $db->simple_select('feedpublisher_feeds', 'id,name,url', '', array('order_by' => 'id', 'limit' => 10));
@@ -113,13 +119,16 @@ function feedpublisher_admin_diagnostics()
         }
     }
 
-    $task = $db->fetch_array($db->simple_select('tasks', 'tid,enabled,nextrun', "file='feedpublisher'", array('limit' => 1)));
-    $lastRun = 0;
+    $task = $db->fetch_array($db->simple_select('tasks', 'tid,enabled,nextrun,lastrun,locked', "file='feedpublisher'", array('limit' => 1)));
+    $lastRun = $task ? (int) $task['lastrun'] : 0;
     if ($task && $db->table_exists('tasklog')) {
         $log = $db->fetch_array($db->simple_select('tasklog', 'dateline', 'tid=' . (int) $task['tid'], array('order_by' => 'dateline', 'order_dir' => 'DESC', 'limit' => 1)));
-        $lastRun = $log ? (int) $log['dateline'] : 0;
+        if ($log) {
+            $lastRun = (int) $log['dateline'];
+        }
     }
     $overdue = $task && !empty($task['enabled']) && (int) $task['nextrun'] > 0 && (int) $task['nextrun'] < TIME_NOW - 600;
+    $taskFileExists = is_file(MYBB_ROOT . 'inc/tasks/feedpublisher.php');
 
     $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
     $page->add_breadcrumb_item('Diagnostics');
@@ -138,10 +147,24 @@ function feedpublisher_admin_diagnostics()
     $runtime->output('Runtime requirements');
 
     $taskTable = new Table;
-    $taskTable->construct_header('Task state'); $taskTable->construct_header('Next run'); $taskTable->construct_header('Last run');
-    $taskTable->construct_cell(!$task ? '<span style="color:#a00">Not installed</span>' : (!empty($task['enabled']) ? 'Enabled' : '<span style="color:#a00">Disabled</span>'));
-    $taskTable->construct_cell($task && (int) $task['nextrun'] ? my_date('normal', (int) $task['nextrun']) . ($overdue ? '<br><strong style="color:#a00">Appears overdue</strong>' : '') : 'Not scheduled');
-    $taskTable->construct_cell($lastRun ? my_date('normal', $lastRun) : 'No task log found'); $taskTable->construct_row();
+    $taskTable->construct_header('Task state'); $taskTable->construct_header('Schedule'); $taskTable->construct_header('Runner status'); $taskTable->construct_header('Action');
+    $taskState = !$task ? '<span style="color:#a00">Not installed</span>' : (!empty($task['enabled']) ? 'Enabled' : '<span style="color:#a00">Disabled</span>');
+    $taskState .= '<br><small>Task file: ' . ($taskFileExists ? 'Available' : '<span style="color:#a00">Missing</span>') . '</small>';
+    $taskTable->construct_cell($taskState);
+    $taskTable->construct_cell('Next run: ' . ($task && (int) $task['nextrun'] ? my_date('normal', (int) $task['nextrun']) : 'Not scheduled')
+        . '<br>Last run: ' . ($lastRun ? my_date('normal', $lastRun) : 'Never recorded'));
+    $runner = $overdue
+        ? '<strong style="color:#a00">Appears overdue</strong><br><small>MyBB has not triggered this due task. Check the MyBB task image/cron runner if it becomes overdue again after rescheduling.</small>'
+        : 'No overdue task detected';
+    if ($task && (int) $task['locked'] > 0) {
+        $runner .= '<br><small>Lock: ' . my_date('normal', (int) $task['locked']) . '</small>';
+    }
+    $taskTable->construct_cell($runner);
+    $taskTable->construct_cell('<form method="post" action="index.php?module=config/feedpublisher&amp;action=diagnostics" style="margin:0">'
+        . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '">'
+        . '<input type="hidden" name="reschedule_task" value="1">'
+        . '<input class="button" type="submit" value="Reschedule task"></form>');
+    $taskTable->construct_row();
     $taskTable->output('Scheduled task');
 
     $feedTable = new Table;
@@ -198,7 +221,8 @@ function feedpublisher_admin_diagnostics()
     $showUrls = $mybb->get_input('show_urls', MyBB::INPUT_INT) ? true : false;
     $report = array('Feed Publisher support report', 'Plugin: ' . feedpublisher_info()['version'], 'MyBB: ' . (defined('MYBB_VERSION') ? MYBB_VERSION : 'unknown'), 'PHP: ' . PHP_VERSION,
         'Extensions: curl=' . (extension_loaded('curl') ? 'yes' : 'no') . ' dom=' . (extension_loaded('dom') ? 'yes' : 'no') . ' libxml=' . (extension_loaded('libxml') ? 'yes' : 'no') . ' SimpleXML=' . (extension_loaded('SimpleXML') ? 'yes' : 'no'),
-        'Task: ' . (!$task ? 'missing' : (!empty($task['enabled']) ? 'enabled' : 'disabled')) . '; overdue=' . ($overdue ? 'yes' : 'no') . '; last_run=' . ($lastRun ?: 0));
+        'Task: ' . (!$task ? 'missing' : (!empty($task['enabled']) ? 'enabled' : 'disabled')) . '; file=' . ($taskFileExists ? 'available' : 'missing') . '; overdue=' . ($overdue ? 'yes' : 'no')
+            . '; next_run=' . ($task ? (int) $task['nextrun'] : 0) . '; last_run=' . ($lastRun ?: 0) . '; locked=' . ($task ? (int) $task['locked'] : 0));
     foreach ($feeds as $feed) {
         $line = 'Feed #' . (int) $feed['id'] . ': enabled=' . (int) $feed['enabled'] . ' paused=' . (int) $feed['publishing_paused'] . ' failures=' . (int) $feed['fetch_failures'] . ' last_success=' . (int) $feed['last_success_at'] . ' last_publish=' . (int) $feed['last_published'];
         if ($showUrls) { $line .= ' url=' . feedpublisher_safe_report_url($feed['url']); }
@@ -227,6 +251,7 @@ function feedpublisher_admin_queue_status()
     while ($feed = $db->fetch_array($query)) {
         $id = (int) $feed['id'];
         $counts = feedpublisher_queue_counts($id);
+        $nextPost = feedpublisher_admin_next_post_time($feed);
         $initialPolicy = feedpublisher_initial_policy_label($feed['initial_policy']);
         $initialStatus = empty($feed['initialized_at'])
             ? 'Pending'
@@ -239,6 +264,7 @@ function feedpublisher_admin_queue_status()
             : 'Active';
         $publication .= '<br><small>Batch: ' . (int) $feed['max_posts_per_run'] . ' &middot; Order: ' . htmlspecialchars_uni($feed['queue_order']) . '</small>';
         $publication .= '<br><small>Next eligible publication: ' . ($nextPublish > TIME_NOW ? my_date('normal', $nextPublish) : 'Now') . '</small>';
+        $publication .= '<br><small>Next post: ' . ($nextPost ? ($nextPost <= TIME_NOW ? 'Now' : my_date('normal', $nextPost)) : 'None queued') . '</small>';
 
         $table->construct_cell('<a id="feed-' . $id . '"></a><strong>' . htmlspecialchars_uni($feed['name']) . '</strong><br><small>Feed #' . $id . '</small>');
         $table->construct_cell('Queued: ' . $counts['queued'] . '<br>Processing: ' . $counts['processing']);
@@ -319,12 +345,16 @@ function feedpublisher_admin_list()
         $counts = feedpublisher_queue_counts($id);
         $active = $counts['queued'] + $counts['pending_approval'] + $counts['processing'];
         $attention = $counts['failed'] + $counts['uncertain'];
-        $queueStatus = 'Active: ' . $active . ($attention ? '<br><strong style="color:#a00">Needs attention: ' . $attention . '</strong>' : '')
-            . '<br><a href="index.php?module=config/feedpublisher&amp;action=queue#feed-' . $id . '">Queue details</a>';
+        $nextPost = feedpublisher_admin_next_post_time($feed);
+        $recentError = feedpublisher_admin_recent_publication_error($id);
+        $queueStatus = 'Active: ' . $active . ($attention ? '<br><strong style="color:#a00">Needs attention: ' . $attention . '</strong>' : '');
         $initialStatus = empty($feed['initialized_at'])
             ? 'Initial scan pending'
             : 'Initial scan: ' . my_date('relative', (int) $feed['initialized_at']);
-        $initialStatus .= '<br><small>Initial policy: ' . htmlspecialchars_uni(feedpublisher_initial_policy_label($feed['initial_policy'])) . '</small>';
+        $initialStatus .= '<br>Next post: ' . ($nextPost ? ($nextPost <= TIME_NOW ? 'Now' : my_date('normal', $nextPost)) : 'None queued');
+        if ($recentError) {
+            $initialStatus .= '<br><small style="color:#a00">Last publish error: ' . htmlspecialchars_uni(feedpublisher_safe_diagnostic_text($recentError['last_error'])) . '</small>';
+        }
         $controls = '<a href="index.php?module=config/feedpublisher&amp;action=edit&amp;id=' . $id . '">Edit</a>'
             . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=preview&amp;id=' . $id . '">Preview</a>'
             . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=operations&amp;id=' . $id . '">Operations</a>'
@@ -360,6 +390,43 @@ function feedpublisher_initial_policy_label($policy)
     return isset($labels[$policy]) ? $labels[$policy] : $policy;
 }
 
+function feedpublisher_admin_next_post_time($feed)
+{
+    global $db;
+
+    if (!empty($feed['publishing_paused'])) {
+        return 0;
+    }
+
+    $row = $db->fetch_array($db->simple_select(
+        'feedpublisher_queue',
+        'available_at',
+        'feed_id=' . (int) $feed['id'] . " AND state='queued'",
+        array('order_by' => 'available_at', 'order_dir' => 'ASC', 'limit' => 1)
+    ));
+    if (!$row) {
+        return 0;
+    }
+
+    $availableAt = max(0, (int) $row['available_at']);
+    $pacedAt = (int) $feed['last_published'] > 0
+        ? (int) $feed['last_published'] + max(5, (int) $feed['publish_interval_minutes']) * 60
+        : 0;
+    return max($availableAt, $pacedAt);
+}
+
+function feedpublisher_admin_recent_publication_error($feedId)
+{
+    global $db;
+
+    return $db->fetch_array($db->simple_select(
+        'feedpublisher_queue',
+        'state,title,last_error,attempts,last_attempt,available_at',
+        'feed_id=' . (int) $feedId . " AND last_error!=''",
+        array('order_by' => 'last_attempt', 'order_dir' => 'DESC', 'limit' => 1)
+    ));
+}
+
 function feedpublisher_admin_sort_link($label, $column, $activeSort, $activeDirection)
 {
     $nextDirection = $activeSort === $column && $activeDirection === 'ASC' ? 'desc' : 'asc';
@@ -372,7 +439,7 @@ function feedpublisher_admin_sort_link($label, $column, $activeSort, $activeDire
         . htmlspecialchars_uni($label) . $indicator . '</a>';
 }
 
-function feedpublisher_admin_form($action, $values = array(), $errors = array())
+function feedpublisher_admin_form($action, $values = array(), $errors = array(), $connection = array())
 {
     global $db, $mybb, $page;
 
@@ -409,7 +476,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'maximum_source_age_days' => 0,
         'require_entry_body' => 0,
         'require_entry_media' => 0,
-        'media_mode' => 'ignore',
+        'media_mode' => 'hotlink',
         'publication_mode' => 'automatic',
         'fulltext_mode' => 'disabled',
         'fulltext_fallback' => 'feed',
@@ -424,7 +491,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         'initial_policy' => 'latest',
         'initial_limit' => 1,
         'initialized_at' => 0,
-        'attribution_mode' => 'link',
+        'attribution_mode' => 'none',
         'post_header' => '',
         'post_footer' => '',
         'body_length_limit' => 0,
@@ -454,6 +521,19 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     if ($errors) {
         $page->output_inline_error($errors);
     }
+    if ($connection) {
+        feedpublisher_admin_connection_notice($action, $values, $connection);
+    }
+    echo '<script>'
+        . 'document.addEventListener("DOMContentLoaded",function(){'
+        . 'var policy=document.querySelector("select[name=initial_policy]");'
+        . 'var count=document.querySelector("input[name=initial_limit]");'
+        . 'if(!policy||!count){return;}'
+        . 'var row=count.closest?count.closest("tr"):null;'
+        . 'function toggle(){if(row){row.style.display=policy.value==="recent"?"":"none";}count.disabled=policy.value!=="recent";}'
+        . 'policy.addEventListener("change",toggle);toggle();'
+        . '});'
+        . '</script>';
 
     $forums = array(0 => 'Select a forum');
     $query = $db->simple_select('forums', 'fid,name', "type='f'", array('order_by' => 'disporder,name'));
@@ -480,11 +560,11 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $form = new Form('index.php?module=config/feedpublisher&amp;action=save', 'post');
     echo $form->generate_hidden_field('id', (int) $values['id']);
     $container = new FormContainer($action === 'edit' ? 'Edit feed' : 'Add feed');
-    $container->output_row('Name', 'A descriptive name shown in the Admin CP and task logs. Leave blank to generate one from the feed URL.', $form->generate_text_box('name', $values['name']));
     $container->output_row('Feed or website URL <em>*</em>', 'Enter an exact public RSS/Atom URL, or enter a normal website URL and use Find feeds.',
         $form->generate_text_box('url', $values['url'])
         . ' ' . $form->generate_submit_button('Test connection', array('name' => 'test_connection'))
         . ' ' . $form->generate_submit_button('Find feeds', array('name' => 'find_feeds')));
+    $container->output_row('Name', 'A descriptive name shown in the Admin CP and task logs. Leave blank to generate one from the feed URL.', $form->generate_text_box('name', $values['name']));
     $refresh = "this.form.elements['refresh_prefixes'].click();";
     $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum. Changing it refreshes the available MyBB prefixes.', $form->generate_select_box('fid', $forums, (int) $values['fid'], array('onchange' => $refresh)));
     $container->output_row('Posting user <em>*</em>', 'The MyBB account used as the post author. Changing it refreshes the prefixes this user may apply.', $form->generate_select_box('uid', $users, (int) $values['uid'], array('onchange' => $refresh)));
@@ -534,13 +614,13 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
         $container->output_row('Eligibility rule changes', 'Changing eligibility requires explicit re-evaluation. This removes only prior filter-rejection history so currently visible entries can be evaluated again.',
             $form->generate_check_box('reset_filter_history', 1, 'Confirm filter change and re-evaluate previously filtered entries.'));
     }
-    $container->output_row('Source attribution <em>*</em>', 'Append a source link to every imported thread. Keeping attribution enabled is recommended.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
+    $container->output_row('Source attribution <em>*</em>', 'Optionally append a source link to every imported thread. New feeds default to none.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
     $container->output_row('Post header', 'Optional MyCode placed before the imported body. Allowed placeholders: {title}, {source_url}, {feed_name}, {author}, {published_date}.', $form->generate_text_area('post_header', $values['post_header']));
     $container->output_row('Post footer', 'Optional MyCode placed after the imported body but before the separate source-attribution line. The same safe placeholders are available.', $form->generate_text_area('post_footer', $values['post_footer']));
     $container->output_row('Body length', '0 keeps the complete cleaned body. A positive value creates a word-safe plain-text excerpt at that character limit.', $form->generate_numeric_field('body_length_limit', (int) $values['body_length_limit'], array('min' => 0, 'max' => 100000)));
     $container->output_row('Truncated-post link', 'When an excerpt is shortened, optionally add a link back to the original entry.', $form->generate_select_box('continuation_mode', array('none' => 'Do not add a continuation link', 'source_link' => 'Add a source link'), $values['continuation_mode'])
         . ' &nbsp; Link text: ' . $form->generate_text_box('continuation_text', $values['continuation_text'], array('maxlength' => 100)));
-    $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent queues one; recent count queues a bounded number; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only', 'recent' => 'Recent count', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
+    $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent only queues exactly one newest entry; recent count queues the number below; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only (1 entry)', 'recent' => 'Recent count (use the count below)', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
     $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
     if (!empty($values['initialized_at'])) {
         $container->output_row('Initial scan completed', my_date('relative', (int) $values['initialized_at']) . '. Changing the policy requires confirmation and resets queued, awaiting-approval, skipped, and failed entries for the next discovery.', $form->generate_check_box('reset_initial_policy', 1, 'Confirm reset if the policy or recent count is changed.'));
@@ -563,62 +643,92 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array())
     $page->output_footer();
 }
 
-function feedpublisher_admin_connection_results($values, $candidates, $pageMetadata = array())
+function feedpublisher_admin_connection_rows($candidates)
 {
-    global $page;
+    $rows = array();
+    foreach (array_slice($candidates, 0, 20) as $candidate) {
+        $result = feedpublisher_test_feed_connection($candidate['url']);
+        $parse = isset($result['parse']) ? $result['parse'] : array();
+        $title = !empty($parse['title']) ? $parse['title'] : (!empty($candidate['declared_title']) ? $candidate['declared_title'] : 'Untitled feed');
+        $rows[] = array(
+            'candidate' => $candidate,
+            'result' => $result,
+            'title' => $title,
+            'defaults' => isset($result['defaults']) ? $result['defaults'] : array(),
+        );
+    }
+    return $rows;
+}
 
-    $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
-    $page->add_breadcrumb_item('Source test');
-    $page->output_header('Feed Publisher source test');
-    feedpublisher_admin_tabs(!empty($values['id']) ? 'feeds' : 'add');
-    if ($pageMetadata) {
+function feedpublisher_admin_apply_connection_defaults(&$values, $row)
+{
+    if (empty($row['result']['ok'])) {
+        return;
+    }
+
+    $defaults = $row['defaults'];
+    $values['url'] = $row['candidate']['url'];
+    $values['name'] = !empty($defaults['name']) ? $defaults['name'] : $row['title'];
+    if (!empty($defaults['media_mode']) && in_array($defaults['media_mode'], array('ignore', 'links', 'hotlink'), true)) {
+        $values['media_mode'] = $defaults['media_mode'];
+    }
+    if (!empty($defaults['fulltext_mode']) && in_array($defaults['fulltext_mode'], array('disabled', 'summary', 'always'), true)) {
+        $values['fulltext_mode'] = $defaults['fulltext_mode'];
+    }
+}
+
+function feedpublisher_admin_connection_notice($action, $values, $connection)
+{
+    if (!empty($connection['page'])) {
+        $pageMetadata = $connection['page'];
         echo '<p><strong>Website fetch:</strong> HTTP ' . (int) $pageMetadata['http_status']
             . ' &middot; ' . htmlspecialchars_uni($pageMetadata['content_type'])
             . ' &middot; Redirects: ' . (int) $pageMetadata['redirects'] . '</p>';
     }
-    if (!$candidates) {
-        echo '<div class="error"><p>No declared RSS or Atom links were found. Feed Publisher checks only HTML alternate-link declarations and does not crawl the website.</p></div>';
-    } else {
-        $table = new Table;
-        foreach (array('Feed', 'Connection', 'Detected content', 'Entries', 'Action') as $heading) {
-            $table->construct_header($heading);
-        }
-        foreach (array_slice($candidates, 0, 20) as $candidate) {
-            $result = feedpublisher_test_feed_connection($candidate['url']);
-            $fetch = $result['fetch'];
-            $parse = $result['parse'];
-            $defaults = isset($result['defaults']) ? $result['defaults'] : array();
-            $title = !empty($parse['title']) ? $parse['title'] : (!empty($candidate['declared_title']) ? $candidate['declared_title'] : 'Untitled feed');
-            $table->construct_cell('<strong>' . htmlspecialchars_uni($title) . '</strong><br><small>' . htmlspecialchars_uni($candidate['url']) . '</small>');
-            $connection = ($result['ok'] ? '<span style="color:#287b31">Success</span>' : '<span style="color:#a00">Failed at ' . htmlspecialchars_uni($result['stage']) . '</span>')
-                . '<br><small>HTTP ' . (isset($fetch['http_status']) ? (int) $fetch['http_status'] : 'not received')
-                . ' &middot; ' . htmlspecialchars_uni(isset($fetch['content_type']) && $fetch['content_type'] !== '' ? $fetch['content_type'] : 'no content type')
-                . ' &middot; Redirects: ' . (isset($fetch['redirects']) ? (int) $fetch['redirects'] : 0) . '</small>';
-            if (!$result['ok']) {
-                $connection .= '<br><small>' . htmlspecialchars_uni($result['error']) . '</small>';
-            }
-            $table->construct_cell($connection);
-            $detected = $result['ok'] ? htmlspecialchars_uni($parse['format']) . '<br><small>' . htmlspecialchars_uni($parse['encoding']) . '</small>' : 'Not parsed';
-            if ($result['ok']) {
-                $detected .= '<br><small>Media: ' . ((int) $defaults['media_urls'] > 0 ? (int) $defaults['media_urls'] . ' URLs in ' . (int) $defaults['media_items'] . ' entries' : 'none detected') . '</small>';
-                $detected .= '<br><small>Full article: ' . ((int) $defaults['short_items'] > 0 ? 'summary-only candidates detected' : 'not suggested') . '</small>';
-            }
-            $table->construct_cell($detected);
-            $newest = $result['newest'] ? my_date('normal', $result['newest']) : 'No valid source date';
-            $table->construct_cell($result['ok'] ? (int) $result['items'] . '<br><small>Newest: ' . $newest . '</small>' : '&mdash;');
-            $useUrl = 'index.php?module=config/feedpublisher&amp;action=' . (!empty($values['id']) ? 'edit&amp;id=' . (int) $values['id'] : 'add')
-                . '&amp;feed_url=' . rawurlencode($candidate['url'])
-                . '&amp;feed_name=' . rawurlencode(!empty($defaults['name']) ? $defaults['name'] : $title)
-                . '&amp;feed_media_mode=' . rawurlencode(!empty($defaults['media_mode']) ? $defaults['media_mode'] : 'ignore')
-                . '&amp;feed_fulltext_mode=' . rawurlencode(!empty($defaults['fulltext_mode']) ? $defaults['fulltext_mode'] : 'disabled');
-            $table->construct_cell($result['ok'] ? '<a class="button" href="' . $useUrl . '">Use this feed</a>' : 'Unavailable');
-            $table->construct_row();
-        }
-        $table->output($pageMetadata ? 'Declared feeds' : 'Connection result');
+    if (!empty($connection['message'])) {
+        echo '<div class="' . (!empty($connection['ok']) ? 'success' : 'error') . '"><p>' . htmlspecialchars_uni($connection['message']) . '</p></div>';
     }
-    echo '<p><a class="button" href="#" onclick="history.back(); return false;">&larr; Return to feed form</a> '
-        . '<a class="button" href="index.php?module=config/feedpublisher&amp;action=add">+ Add feed</a></p>';
-    $page->output_footer();
+    if (empty($connection['rows'])) {
+        return;
+    }
+
+    $table = new Table;
+    foreach (array('Feed', 'Connection', 'Detected content', 'Entries', 'Action') as $heading) {
+        $table->construct_header($heading);
+    }
+    foreach ($connection['rows'] as $row) {
+        $result = $row['result'];
+        $fetch = $result['fetch'];
+        $parse = $result['parse'];
+        $defaults = $row['defaults'];
+        $title = $row['title'];
+        $table->construct_cell('<strong>' . htmlspecialchars_uni($title) . '</strong><br><small>' . htmlspecialchars_uni($row['candidate']['url']) . '</small>');
+        $status = ($result['ok'] ? '<span style="color:#287b31">Success</span>' : '<span style="color:#a00">Failed at ' . htmlspecialchars_uni($result['stage']) . '</span>')
+            . '<br><small>HTTP ' . (isset($fetch['http_status']) ? (int) $fetch['http_status'] : 'not received')
+            . ' &middot; ' . htmlspecialchars_uni(isset($fetch['content_type']) && $fetch['content_type'] !== '' ? $fetch['content_type'] : 'no content type')
+            . ' &middot; Redirects: ' . (isset($fetch['redirects']) ? (int) $fetch['redirects'] : 0) . '</small>';
+        if (!$result['ok']) {
+            $status .= '<br><small>' . htmlspecialchars_uni($result['error']) . '</small>';
+        }
+        $table->construct_cell($status);
+        $detected = $result['ok'] ? htmlspecialchars_uni($parse['format']) . '<br><small>' . htmlspecialchars_uni($parse['encoding']) . '</small>' : 'Not parsed';
+        if ($result['ok']) {
+            $detected .= '<br><small>Media: ' . ((int) $defaults['media_urls'] > 0 ? (int) $defaults['media_urls'] . ' URLs in ' . (int) $defaults['media_items'] . ' entries' : 'none detected') . '</small>';
+            $detected .= '<br><small>Full article: ' . ((int) $defaults['short_items'] > 0 ? 'suggested for short feed entries' : 'not needed') . '</small>';
+        }
+        $table->construct_cell($detected);
+        $newest = $result['newest'] ? my_date('normal', $result['newest']) : 'No valid source date';
+        $table->construct_cell($result['ok'] ? (int) $result['items'] . '<br><small>Newest: ' . $newest . '</small>' : '&mdash;');
+        $useUrl = 'index.php?module=config/feedpublisher&amp;action=' . (!empty($values['id']) ? 'edit&amp;id=' . (int) $values['id'] : 'add')
+            . '&amp;feed_url=' . rawurlencode($row['candidate']['url'])
+            . '&amp;feed_name=' . rawurlencode(!empty($defaults['name']) ? $defaults['name'] : $title)
+            . '&amp;feed_media_mode=' . rawurlencode(!empty($defaults['media_mode']) ? $defaults['media_mode'] : 'ignore')
+            . '&amp;feed_fulltext_mode=' . rawurlencode(!empty($defaults['fulltext_mode']) ? $defaults['fulltext_mode'] : 'disabled');
+        $current = $result['ok'] && $values['url'] === $row['candidate']['url'];
+        $table->construct_cell($result['ok'] ? ($current ? 'Applied to form' : '<a class="button" href="' . $useUrl . '">Use this feed</a>') : 'Unavailable');
+        $table->construct_row();
+    }
+    $table->output(!empty($connection['page']) ? 'Declared feeds' : 'Connection result');
 }
 
 function feedpublisher_admin_save()
@@ -700,13 +810,49 @@ function feedpublisher_admin_save()
         return;
     }
     if ($values['test_connection']) {
-        feedpublisher_admin_connection_results($values, array(array('url' => $values['url'], 'declared_title' => $values['name'])));
+        $rows = feedpublisher_admin_connection_rows(array(array('url' => $values['url'], 'declared_title' => $values['name'])));
+        $message = 'The feed connection failed.';
+        $ok = false;
+        if (!empty($rows[0]['result']['ok'])) {
+            feedpublisher_admin_apply_connection_defaults($values, $rows[0]);
+            $message = 'Connection passed and detected defaults were applied to the form.';
+            $ok = true;
+        }
+        feedpublisher_admin_form($id ? 'edit' : 'add', $values, array(), array(
+            'ok' => $ok,
+            'message' => $message,
+            'rows' => $rows,
+        ));
         return;
     }
     if ($values['find_feeds']) {
         try {
             $discovery = feedpublisher_discover_declared_feeds($values['url']);
-            feedpublisher_admin_connection_results($values, $discovery['candidates'], $discovery['page']);
+            $rows = feedpublisher_admin_connection_rows($discovery['candidates']);
+            $usable = array();
+            foreach ($rows as $row) {
+                if (!empty($row['result']['ok'])) {
+                    $usable[] = $row;
+                }
+            }
+            $message = 'No usable declared RSS or Atom feeds were found.';
+            $ok = false;
+            if (count($usable) === 1) {
+                feedpublisher_admin_apply_connection_defaults($values, $usable[0]);
+                $message = 'One usable feed was found and applied to the form.';
+                $ok = true;
+            } elseif (count($usable) > 1) {
+                $message = 'Multiple usable feeds were found. Choose one below.';
+                $ok = true;
+            } elseif (!$discovery['candidates']) {
+                $message = 'No declared RSS or Atom links were found. Feed Publisher checks only HTML alternate-link declarations and does not crawl the website.';
+            }
+            feedpublisher_admin_form($id ? 'edit' : 'add', $values, array(), array(
+                'ok' => $ok,
+                'message' => $message,
+                'page' => $discovery['page'],
+                'rows' => $rows,
+            ));
         } catch (Throwable $exception) {
             feedpublisher_admin_form($id ? 'edit' : 'add', $values, array('Feed discovery failed: ' . htmlspecialchars_uni(feedpublisher_safe_log_text($exception->getMessage()))));
         }
@@ -1344,7 +1490,7 @@ function feedpublisher_admin_operations_page()
     $query = $db->simple_select(
         'feedpublisher_queue',
         '*',
-        'feed_id=' . $id . " AND state IN ('failed','uncertain')",
+        'feed_id=' . $id . " AND (state IN ('failed','uncertain') OR (state='queued' AND attempts>0 AND last_error!=''))",
         array('order_by' => 'last_attempt', 'order_dir' => 'DESC', 'limit' => 100)
     );
     while ($item = $db->fetch_array($query)) {
@@ -1357,7 +1503,7 @@ function feedpublisher_admin_operations_page()
                 . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '">'
                 . '<input type="hidden" name="id" value="' . $id . '"><input type="hidden" name="queue_id" value="' . (int) $item['id'] . '">'
                 . '<input type="hidden" name="operation" value="retry_item"><input type="submit" class="button" value="Retry this item"></form>';
-        } else {
+        } elseif ($item['state'] === 'uncertain') {
             echo '<form action="index.php?module=config/feedpublisher&amp;action=operation" method="post">'
                 . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '">'
                 . '<input type="hidden" name="id" value="' . $id . '"><input type="hidden" name="queue_id" value="' . (int) $item['id'] . '">'
@@ -1367,15 +1513,18 @@ function feedpublisher_admin_operations_page()
                 . 'Post ID: <input type="number" name="pid" min="0" style="width:80px"><br>'
                 . '<label><input type="checkbox" name="confirm" value="1"> Confirm this resolution; before retrying, verify that no thread or post was created.</label><br>'
                 . '<input type="submit" class="button" value="Resolve uncertain item"></form>';
+        } else {
+            echo 'Automatic retry scheduled'
+                . '<br><small>Next attempt: ' . ((int) $item['available_at'] > TIME_NOW ? my_date('normal', (int) $item['available_at']) : 'next task run') . '</small>';
         }
         $queueTable->construct_cell(ob_get_clean());
         $queueTable->construct_row();
     }
     if ($queueTable->num_rows() === 0) {
-        $queueTable->construct_cell('No failed or uncertain entries require action.', array('colspan' => 4));
+        $queueTable->construct_cell('No failed, uncertain, or retrying entries require attention.', array('colspan' => 4));
         $queueTable->construct_row();
     }
-    $queueTable->output('Items requiring attention');
+    $queueTable->output('Items requiring attention or retry');
     echo '<p><a class="button" href="index.php?module=config/feedpublisher">View all feeds</a></p>';
     $page->output_footer();
 }

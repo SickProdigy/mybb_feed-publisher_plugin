@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.32 - 2026-09-13
+
+- Calculate the Feed Publisher scheduled task's next run when creating it,
+  repair missing or stale next-run metadata on activation, and add a
+  Diagnostics action to reschedule and unlock the task.
+- Show task file, last run, lock, and overdue task-runner guidance in
+  Diagnostics.
+- Keep connection-test and feed-discovery feedback on the add/edit form instead
+  of sending administrators to a separate results page; apply detected defaults
+  automatically when an exact URL works or discovery finds one usable feed.
+- Put the feed URL before Name on the add/edit form and clarify full-article
+  detection wording in connection results.
+- Default new feed-media handling to showing images while linking videos and
+  files; detected feed media now applies that same safer rich-media default.
+- Default new feed source attribution to none.
+- Clarify initial-import policy labels and show Initial recent count only when
+  the Recent count policy is selected.
+- Show the next queued post time in the feed-list Queue column and Queue tab,
+  and keep initial policy details on the dedicated Queue tab.
+- Prepare a safe cron publication request context so MyBB post creation has a
+  loopback IP address and posting-user context during scheduled tasks.
+- Include publication exception details in task summaries and show queued retry
+  errors in the feed list and Operations page before they become permanent
+  failures.
+
 ## 0.1.31 - 2026-09-13
 
 - Let connection-test and feed-discovery results apply detected feed defaults

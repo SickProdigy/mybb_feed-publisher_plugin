@@ -285,7 +285,7 @@ $suite->test('feed test suggests title, media links, and summary full text defau
         array('url' => 'https://example.com/b', 'content' => str_repeat('complete ', 100), 'media' => array()),
     ));
     $t->assertSame('Example Feed', $defaults['name']);
-    $t->assertSame('links', $defaults['media_mode']);
+    $t->assertSame('hotlink', $defaults['media_mode']);
     $t->assertSame('summary', $defaults['fulltext_mode']);
     $t->assertSame(1, $defaults['media_items']);
     $t->assertSame(1, $defaults['media_urls']);
@@ -536,6 +536,7 @@ $suite->test('unsafe HTML is removed before MyCode conversion', function ($t) {
 $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $source = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher.php');
     $adminSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/admin.php');
+    $publisherSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
@@ -546,6 +547,14 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("drop_table('feedpublisher_logs')", $source);
     $t->assertContains("delete_query('tasks'", $source);
     $t->assertContains("'enabled' => 1", $source);
+    $t->assertContains("fetch_next_run", $source);
+    $t->assertContains("(int) \$existing['nextrun'] < TIME_NOW", $source);
+    $t->assertContains("feedpublisher_reschedule_task", $adminSource);
+    $t->assertContains("feedpublisher_admin_next_post_time", $adminSource);
+    $t->assertContains("feedpublisher_admin_recent_publication_error", $adminSource);
+    $t->assertContains("Automatic retry scheduled", $adminSource);
+    $t->assertContains("feedpublisher_prepare_publication_request_context", $publisherSource);
+    $t->assertContains("\$_SERVER['REMOTE_ADDR'] = '127.0.0.1'", $publisherSource);
     $t->assertContains("'url' => 'f.url'", $adminSource);
     $t->assertContains("'forum' => 'fo.name'", $adminSource);
     $t->assertContains("feedpublisher_admin_sort_link('Name'", $adminSource);

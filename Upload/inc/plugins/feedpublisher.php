@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://sickgaming.net',
         'author' => 'SickProdigy',
         'authorsite' => 'https://sickgaming.net',
-        'version' => '0.1.31',
+        'version' => '0.1.32',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -267,11 +267,22 @@ function feedpublisher_install_task()
 {
     global $db;
 
-    if ($db->fetch_field($db->simple_select('tasks', 'tid', "file='feedpublisher'", array('limit' => 1)), 'tid')) {
+    $task = feedpublisher_task_definition();
+    $existing = $db->fetch_array($db->simple_select('tasks', 'tid,enabled,nextrun', "file='feedpublisher'", array('limit' => 1)));
+    if ($existing) {
+        if (!empty($existing['enabled']) && ((int) $existing['nextrun'] <= 0 || (int) $existing['nextrun'] < TIME_NOW)) {
+            feedpublisher_reschedule_task((int) $existing['tid']);
+        }
         return;
     }
 
-    $db->insert_query('tasks', array(
+    $task['nextrun'] = feedpublisher_task_next_run($task);
+    $db->insert_query('tasks', $task);
+}
+
+function feedpublisher_task_definition()
+{
+    return array(
         'title' => 'Feed Publisher imports',
         'description' => 'Discovers feed entries and publishes queued items at controlled intervals.',
         'file' => 'feedpublisher',
@@ -282,7 +293,33 @@ function feedpublisher_install_task()
         'weekday' => '*',
         'enabled' => 1,
         'logging' => 1,
-    ));
+    );
+}
+
+function feedpublisher_task_next_run($task)
+{
+    require_once MYBB_ROOT . 'inc/functions_task.php';
+    return fetch_next_run($task);
+}
+
+function feedpublisher_reschedule_task($tid = 0)
+{
+    global $db;
+
+    $task = $tid
+        ? $db->fetch_array($db->simple_select('tasks', '*', 'tid=' . (int) $tid . " AND file='feedpublisher'", array('limit' => 1)))
+        : $db->fetch_array($db->simple_select('tasks', '*', "file='feedpublisher'", array('limit' => 1)));
+    if (!$task) {
+        feedpublisher_install_task();
+        return 'created';
+    }
+
+    $task = array_merge(feedpublisher_task_definition(), $task);
+    $db->update_query('tasks', array(
+        'nextrun' => feedpublisher_task_next_run($task),
+        'locked' => 0,
+    ), 'tid=' . (int) $task['tid']);
+    return 'rescheduled';
 }
 
 function feedpublisher_admin_action_handler(&$actions)
