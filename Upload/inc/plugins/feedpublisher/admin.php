@@ -464,6 +464,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         'fid' => 0,
         'uid' => 0,
         'title_prefix' => '',
+        'title_strip_regex' => '',
         'thread_prefix_id' => 0,
         'thread_date_mode' => 'publish',
         'future_date_policy' => 'hold',
@@ -579,6 +580,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
     $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum. Changing it refreshes the available MyBB prefixes.', $form->generate_select_box('fid', $forums, (int) $values['fid'], array('onchange' => $refresh)));
     $container->output_row('Posting user <em>*</em>', 'The MyBB account used as the post author. Changing it refreshes the prefixes this user may apply.', $form->generate_select_box('uid', $users, (int) $values['uid'], array('onchange' => $refresh)));
     $container->output_row('Title prefix text', 'Optional text added to the beginning of every generated title, such as [RSS] or Freebie:.', $form->generate_text_box('title_prefix', $values['title_prefix'], array('maxlength' => 40)));
+    $container->output_row('Title removal regex', 'Optional PHP-compatible regular expression. Matching title text is removed before the title prefix is added. Example: ~^Now Available on Steam\\s*-\\s*~i', $form->generate_text_box('title_strip_regex', $values['title_strip_regex'], array('maxlength' => 255)));
     $container->output_row('MyBB thread prefix', 'Optional built-in styled prefix available to the selected posting user in the destination forum.', $form->generate_select_box('thread_prefix_id', $prefixOptions, $selectedPrefixId)
         . ' <input type="submit" class="button" name="refresh_prefixes" value="Refresh prefix choices" style="display:none">');
     $container->output_row('Thread date', 'Choose whether MyBB shows when Feed Publisher created the thread or the valid publication date supplied by the feed.', $form->generate_select_box('thread_date_mode', array('publish' => 'Time posted to MyBB', 'source' => 'Original feed publication time'), $values['thread_date_mode']));
@@ -776,6 +778,7 @@ function feedpublisher_admin_save()
         'fid' => $mybb->get_input('fid', MyBB::INPUT_INT),
         'uid' => $mybb->get_input('uid', MyBB::INPUT_INT),
         'title_prefix' => $mybb->get_input('title_prefix'),
+        'title_strip_regex' => trim($mybb->get_input('title_strip_regex')),
         'thread_prefix_id' => $mybb->get_input('thread_prefix_id', MyBB::INPUT_INT),
         'thread_date_mode' => $mybb->get_input('thread_date_mode'),
         'future_date_policy' => $mybb->get_input('future_date_policy'),
@@ -904,6 +907,10 @@ function feedpublisher_admin_save()
         $errors[] = 'Title prefix text must be one line and no longer than 40 characters.';
     }
     $values['title_prefix'] = feedpublisher_normalize_title_prefix($values['title_prefix']);
+    $titleRegexError = feedpublisher_title_strip_regex_error($values['title_strip_regex']);
+    if ($titleRegexError !== '') {
+        $errors[] = $titleRegexError;
+    }
     $postingUser = get_user($values['uid']);
     if ($values['thread_prefix_id'] && !feedpublisher_thread_prefix_is_available($values['thread_prefix_id'], $values['fid'], $postingUser)) {
         $errors[] = 'Select a MyBB thread prefix available to the posting user in the destination forum.';
@@ -1031,6 +1038,7 @@ function feedpublisher_admin_save()
         'fid' => $values['fid'],
         'uid' => $values['uid'],
         'title_prefix' => $db->escape_string($values['title_prefix']),
+        'title_strip_regex' => $db->escape_string($values['title_strip_regex']),
         'thread_prefix_id' => $values['thread_prefix_id'],
         'thread_date_mode' => $db->escape_string($values['thread_date_mode']),
         'future_date_policy' => $db->escape_string($values['future_date_policy']),

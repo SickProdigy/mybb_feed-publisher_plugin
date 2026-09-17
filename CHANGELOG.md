@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1 - 2026-09-16
+
+- Add a per-feed title-removal regex applied before the existing plain title
+  prefix, allowing repetitive source text to be replaced by concise labels.
+
 ## 1.0.0 - 2026-09-16
 
 - Validate Initial recent count only when the Recent count initial-import

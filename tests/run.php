@@ -316,6 +316,19 @@ $suite->test('title prefix preserves MyBB 85-character subject limit', function 
     $t->assertSame('[RSS] News Headline', feedpublisher_build_subject('News Headline', " [RSS]\n"));
 });
 
+$suite->test('source title text can be removed by regex before adding a feed prefix', function ($t) {
+    $regex = '~^Now Available on Steam\s*-\s*~i';
+    $t->assertSame('', feedpublisher_title_strip_regex_error($regex));
+    $t->assertSame('SCUM', feedpublisher_transform_title('Now Available on Steam - SCUM', $regex));
+    $t->assertSame('Unrelated release', feedpublisher_transform_title('Unrelated release', $regex));
+    $t->assertSame('Now Available on Steam -', feedpublisher_transform_title('Now Available on Steam -', $regex));
+    $t->assertContains('valid PHP-compatible', feedpublisher_title_strip_regex_error('~[~'));
+    $t->assertSame('[Steam] SCUM', feedpublisher_build_subject(
+        feedpublisher_transform_title('Now Available on Steam - SCUM', $regex),
+        '[Steam]'
+    ));
+});
+
 $suite->test('source attribution rejects unsafe links', function ($t) {
     $message = feedpublisher_add_source_attribution('Body', array('source_url' => 'javascript:bad', 'title' => 'Title'), 'link');
     $t->assertSame('Body', $message);
@@ -324,10 +337,10 @@ $suite->test('source attribution rejects unsafe links', function ($t) {
 });
 
 $suite->test('post templates, placeholders, excerpts, and attribution compose deterministically', function ($t) {
-    $feed = array('name' => 'Release feed', 'title_prefix' => '[News]', 'post_header' => '[b]{feed_name}[/b]',
+    $feed = array('name' => 'Release feed', 'title_prefix' => '[News]', 'title_strip_regex' => '~^Release:\\s*~', 'post_header' => '[b]{feed_name}[/b]',
         'post_footer' => 'By {author} on {published_date}', 'body_length_limit' => 12,
         'continuation_mode' => 'source_link', 'continuation_text' => 'Read the rest', 'attribution_mode' => 'link');
-    $item = array('title' => 'A title', 'content' => 'One two three four five', 'source_url' => 'https://example.com/post',
+    $item = array('title' => 'Release: A title', 'content' => 'One two three four five', 'source_url' => 'https://example.com/post',
         'author' => 'Writer', 'source_published' => 1700000000);
     $post = feedpublisher_compose_post($feed, $item);
     $t->assertSame('[News] A title', $post['title']);
@@ -633,7 +646,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $adminSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/admin.php');
     $publisherSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
-    $t->assertContains("'version' => '1.0.0'", $source);
+    $t->assertContains("'version' => '1.0.1'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);

@@ -11,7 +11,7 @@ if (!defined('IN_MYBB') || !defined('IN_ADMINCP')) {
 
 function feedpublisher_portability_config_fields()
 {
-    return array('name','url','title_prefix','thread_date_mode','future_date_policy','schedule_jitter_minutes',
+    return array('name','url','title_prefix','title_strip_regex','thread_date_mode','future_date_policy','schedule_jitter_minutes',
         'identity_strategy','terminal_retention_days','terminal_retention_count','dedupe_retention_days',
         'strict_reconciliation','eligibility_rules','minimum_source_age_hours','maximum_source_age_days',
         'require_entry_body','require_entry_media','media_mode','media_position','publication_mode','enabled','interval_minutes',
@@ -38,6 +38,8 @@ function feedpublisher_portability_settings_supported($entry)
     feedpublisher_eligibility_rules(isset($entry['eligibility_rules']) ? $entry['eligibility_rules'] : '', $errors);
     $errors = array_merge($errors, feedpublisher_template_errors(isset($entry['post_header']) ? $entry['post_header'] : '', isset($entry['post_footer']) ? $entry['post_footer'] : ''));
     $errors = array_merge($errors, feedpublisher_cleanup_validate_rules(isset($entry['strip_selectors']) ? $entry['strip_selectors'] : '', isset($entry['strip_regexes']) ? $entry['strip_regexes'] : ''));
+    $titleRegexError = feedpublisher_title_strip_regex_error(isset($entry['title_strip_regex']) ? $entry['title_strip_regex'] : '');
+    if ($titleRegexError !== '') $errors[] = $titleRegexError;
     $enums = array('thread_date_mode' => array('publish','source'), 'future_date_policy' => array('hold','clamp','skip','reject'),
         'identity_strategy' => array('guid_link','title','content','title_content'), 'media_mode' => array('ignore','fallback_image','links','hotlink'),
         'media_position' => array('top','bottom'),
@@ -287,7 +289,7 @@ function feedpublisher_portability_defaults($entry, $fid, $uid, $preserveEnabled
 {
     $defaults = array(
         'name' => my_substr(trim((string) ($entry['name'] ?? '')), 0, 150), 'url' => trim((string) ($entry['url'] ?? '')),
-        'title_prefix' => '', 'thread_date_mode' => 'publish', 'future_date_policy' => 'hold', 'schedule_jitter_minutes' => 0,
+        'title_prefix' => '', 'title_strip_regex' => '', 'thread_date_mode' => 'publish', 'future_date_policy' => 'hold', 'schedule_jitter_minutes' => 0,
         'identity_strategy' => 'guid_link', 'terminal_retention_days' => 90, 'terminal_retention_count' => 1000,
         'dedupe_retention_days' => 0, 'strict_reconciliation' => 0, 'eligibility_rules' => '',
         'minimum_source_age_hours' => 0, 'maximum_source_age_days' => 0, 'require_entry_body' => 1,
@@ -322,6 +324,7 @@ function feedpublisher_portability_defaults($entry, $fid, $uid, $preserveEnabled
     $bounds['fulltext_max_per_run'] = array(1,10);
     foreach ($bounds as $field => $range) $defaults[$field] = max($range[0], min($range[1], (int) $defaults[$field]));
     $defaults['title_prefix'] = my_substr(trim((string) $defaults['title_prefix']), 0, 40);
+    $defaults['title_strip_regex'] = my_substr(trim((string) $defaults['title_strip_regex']), 0, 255);
     $defaults['continuation_text'] = my_substr(trim((string) $defaults['continuation_text']), 0, 100);
     foreach (array('eligibility_rules','post_header','post_footer','strip_selectors','strip_regexes') as $field) {
         $defaults[$field] = substr((string) $defaults[$field], 0, 10000);

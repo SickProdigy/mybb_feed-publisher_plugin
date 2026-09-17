@@ -114,6 +114,31 @@ function feedpublisher_normalize_title_prefix($prefix)
     return trim(preg_replace('/\s+/u', ' ', (string) $prefix));
 }
 
+function feedpublisher_title_strip_regex_error($regex)
+{
+    $regex = trim((string) $regex);
+    if ($regex === '') {
+        return '';
+    }
+    if (strlen($regex) > 255 || preg_match('/[\r\n\x00]/', $regex)) {
+        return 'Title removal regex must be one line and no longer than 255 characters.';
+    }
+    return @preg_match($regex, '') === false ? 'Enter a valid PHP-compatible title removal regex.' : '';
+}
+
+function feedpublisher_transform_title($title, $stripRegex = '')
+{
+    $title = trim(preg_replace('/\s+/u', ' ', (string) $title));
+    $stripRegex = trim((string) $stripRegex);
+    if ($stripRegex === '' || feedpublisher_title_strip_regex_error($stripRegex) !== '') {
+        return $title;
+    }
+
+    $transformed = @preg_replace($stripRegex, '', $title);
+    $transformed = is_string($transformed) ? trim(preg_replace('/\s+/u', ' ', $transformed)) : '';
+    return $transformed !== '' ? $transformed : $title;
+}
+
 function feedpublisher_build_subject($title, $prefix = '')
 {
     $title = trim(preg_replace('/\s+/u', ' ', (string) $title));
@@ -256,7 +281,8 @@ function feedpublisher_compose_post($feed, $item)
     $footer = feedpublisher_render_template(isset($feed['post_footer']) ? $feed['post_footer'] : '', $feed, $item);
     if (trim($footer) !== '') $parts[] = trim($footer);
     $body = feedpublisher_add_source_attribution(implode("\n\n", $parts), $item, isset($feed['attribution_mode']) ? $feed['attribution_mode'] : 'link');
-    return array('title' => feedpublisher_build_subject($item['title'], isset($feed['title_prefix']) ? $feed['title_prefix'] : ''), 'body' => $body, 'truncated' => $truncated);
+    $title = feedpublisher_transform_title($item['title'], isset($feed['title_strip_regex']) ? $feed['title_strip_regex'] : '');
+    return array('title' => feedpublisher_build_subject($title, isset($feed['title_prefix']) ? $feed['title_prefix'] : ''), 'body' => $body, 'truncated' => $truncated);
 }
 
 function feedpublisher_body_has_image($body)

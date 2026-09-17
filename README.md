@@ -4,7 +4,7 @@ Feed Publisher imports RSS, RDF, and Atom entries as MyBB threads. It uses
 MyBB's post data handler, converts remote HTML to safe MyCode, and does not
 require raw HTML to be enabled in posts.
 
-> **Status:** Stable release (`1.0.0`). Test upgrades and feed behavior on a
+> **Status:** Stable release (`1.0.1`). Test upgrades and feed behavior on a
 > non-production MyBB installation before deployment.
 
 ## Highlights
@@ -143,6 +143,12 @@ Each feed can configure:
 
 - Plain title text such as `[RSS]`
 - A native MyBB thread prefix available to the forum and posting user
+
+Each feed can also remove title text with one validated PHP-compatible regular
+expression before the plain title prefix is added. For example, using
+`~^Now Available on Steam\s*-\s*~i` and setting the title prefix to `[Steam]`
+turns `Now Available on Steam - SCUM` into `[Steam] SCUM`. Titles that do not
+match the expression are unchanged.
 - Optional MyCode header and footer templates
 - A word-safe body character limit
 - Optional continuation text and source link

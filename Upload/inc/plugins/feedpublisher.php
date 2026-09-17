@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://github.com/sickprodigy/mybb_feed-publisher_plugin',
         'author' => 'SickProdigy',
         'authorsite' => 'https://www.sickgaming.net',
-        'version' => '1.0.0',
+        'version' => '1.0.1',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -51,6 +51,7 @@ function feedpublisher_install()
             `fid` int unsigned NOT NULL,
             `uid` int unsigned NOT NULL,
             `title_prefix` varchar(40) NOT NULL DEFAULT '',
+            `title_strip_regex` varchar(255) NOT NULL DEFAULT '',
             `thread_prefix_id` int unsigned NOT NULL DEFAULT 0,
             `thread_date_mode` varchar(16) NOT NULL DEFAULT 'publish',
             `future_date_policy` varchar(16) NOT NULL DEFAULT 'hold',
@@ -134,7 +135,8 @@ function feedpublisher_upgrade_schema()
 
     $columns = array(
         'title_prefix' => "varchar(40) NOT NULL DEFAULT '' AFTER `uid`",
-        'thread_prefix_id' => "int unsigned NOT NULL DEFAULT 0 AFTER `title_prefix`",
+        'title_strip_regex' => "varchar(255) NOT NULL DEFAULT '' AFTER `title_prefix`",
+        'thread_prefix_id' => "int unsigned NOT NULL DEFAULT 0 AFTER `title_strip_regex`",
         'thread_date_mode' => "varchar(16) NOT NULL DEFAULT 'publish' AFTER `thread_prefix_id`",
         'future_date_policy' => "varchar(16) NOT NULL DEFAULT 'hold' AFTER `thread_date_mode`",
         'schedule_jitter_minutes' => "tinyint unsigned NOT NULL DEFAULT 0 AFTER `future_date_policy`",
