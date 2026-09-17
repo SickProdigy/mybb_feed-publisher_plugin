@@ -1,0 +1,65 @@
+name: Publish release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag to publish, for example v1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    uses: ./.github/workflows/validate.yml
+    with:
+      release_tag: ${{ github.event.inputs.release_tag || github.ref_name }}
+      checkout_ref: ${{ github.event.inputs.release_tag || github.ref }}
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.release_tag || github.ref }}
+
+      - name: Download archive
+        uses: actions/download-artifact@v4
+        with:
+          name: mybb-feed-publisher
+          path: dist
+
+      - name: Extract release notes
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          awk -v version="$version" '
+            $0 ~ "^## \\[?" version "\\]?([ -]|$)" { in_section = 1; next }
+            in_section && /^## / { exit }
+            in_section { print }
+          ' CHANGELOG.md | sed '/./,$!d' > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            printf 'Automated release for %s.\n' "$RELEASE_TAG" > release-notes.md
+          fi
+
+      - name: Create GitHub release or replace its archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "Feed Publisher $RELEASE_TAG" --notes-file release-notes.md --latest
+            gh release upload "$RELEASE_TAG" dist/*.zip --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/*.zip --verify-tag --title "Feed Publisher $RELEASE_TAG" --notes-file release-notes.md --latest
+          fi

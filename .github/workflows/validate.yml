@@ -1,0 +1,97 @@
+name: Validate and package
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Optional release tag that must match the plugin version
+        required: false
+        type: string
+      checkout_ref:
+        description: Optional git ref to validate and package
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
+
+      - name: Validate source, tests, version, and archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./tests/lint.sh
+
+          version="$(sed -n "s/.*'version'[[:space:]]*=>[[:space:]]*'\([^']*\)'.*/\1/p" Upload/inc/plugins/feedpublisher.php | head -n 1)"
+          if [ -z "$version" ]; then
+            echo "Plugin version is missing." >&2
+            exit 1
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Plugin version is invalid: $version" >&2
+            exit 1
+          fi
+          if [[ -n "$RELEASE_TAG_INPUT" && "${RELEASE_TAG_INPUT#v}" != "$version" ]]; then
+            echo "Tag $RELEASE_TAG_INPUT does not match plugin version $version." >&2
+            exit 1
+          fi
+          if ! grep -E "^## \[?$version\]?([ -]|$)" CHANGELOG.md >/dev/null; then
+            echo "CHANGELOG.md has no release heading for $version." >&2
+            exit 1
+          fi
+
+          mkdir -p dist
+          archive="dist/mybb-feed-publisher-$version.zip"
+          zip -X -q -r "$archive" Upload README.md LICENSE CHANGELOG.md
+
+          archive_contents="$(unzip -Z1 "$archive")"
+          required_entries=(
+            Upload/inc/plugins/feedpublisher.php
+            Upload/inc/plugins/feedpublisher/admin.php
+            Upload/inc/plugins/feedpublisher/core.php
+            Upload/inc/plugins/feedpublisher/fulltext.php
+            Upload/inc/plugins/feedpublisher/operations.php
+            Upload/inc/plugins/feedpublisher/portability.php
+            Upload/inc/plugins/feedpublisher/publisher.php
+            Upload/inc/plugins/feedpublisher/queue.php
+            Upload/inc/tasks/feedpublisher.php
+            README.md
+            LICENSE
+            CHANGELOG.md
+          )
+          for required_entry in "${required_entries[@]}"; do
+            grep -F -x "$required_entry" <<< "$archive_contents" >/dev/null || {
+              echo "Archive is missing required entry: $required_entry" >&2
+              exit 1
+            }
+          done
+
+          if grep -E '^(tests|docs|\.git)/' <<< "$archive_contents" >/dev/null; then
+            echo "Archive contains development-only files." >&2
+            exit 1
+          fi
+
+          echo "Validation and packaging passed for Feed Publisher $version."
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: mybb-feed-publisher
+          path: dist/*.zip
+          if-no-files-found: error

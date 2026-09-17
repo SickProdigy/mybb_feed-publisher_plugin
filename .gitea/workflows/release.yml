@@ -1,0 +1,151 @@
+name: Publish release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag to publish, for example v1.0.0
+        required: true
+        type: string
+
+jobs:
+  publish:
+    runs-on: web
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate, package, and publish
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
+          GITEA_API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          release_tag="$INPUT_RELEASE_TAG"
+          if [ -z "$release_tag" ]; then
+            release_tag="$GITHUB_REF_NAME"
+          fi
+          if [ -z "$release_tag" ]; then
+            echo "No release tag was provided." >&2
+            exit 1
+          fi
+
+          git fetch --force --tags origin
+          git checkout "$release_tag"
+
+          ./tests/lint.sh
+
+          version="$(sed -n "s/.*'version'[[:space:]]*=>[[:space:]]*'\([^']*\)'.*/\1/p" Upload/inc/plugins/feedpublisher.php | head -n 1)"
+          if [ -z "$version" ]; then
+            echo "Plugin version is missing." >&2
+            exit 1
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Plugin version is invalid: $version" >&2
+            exit 1
+          fi
+          if [[ "${release_tag#v}" != "$version" ]]; then
+            echo "Tag $release_tag does not match plugin version $version." >&2
+            exit 1
+          fi
+          if ! grep -E "^## \[?$version\]?([ -]|$)" CHANGELOG.md >/dev/null; then
+            echo "CHANGELOG.md has no release heading for $version." >&2
+            exit 1
+          fi
+
+          release_body="$(awk -v version="$version" '
+            $0 ~ "^## \\[?" version "\\]?([ -]|$)" { in_section = 1; next }
+            in_section && /^## / { exit }
+            in_section { print }
+          ' CHANGELOG.md | sed '/./,$!d')"
+          if [ -z "$release_body" ]; then
+            release_body="Automated release for $release_tag."
+          fi
+
+          mkdir -p dist
+          archive_name="mybb-feed-publisher-$version.zip"
+          archive="dist/$archive_name"
+          zip -X -q -r "$archive" Upload README.md LICENSE CHANGELOG.md
+
+          archive_contents="$(unzip -Z1 "$archive")"
+          required_entries=(
+            Upload/inc/plugins/feedpublisher.php
+            Upload/inc/plugins/feedpublisher/admin.php
+            Upload/inc/plugins/feedpublisher/core.php
+            Upload/inc/plugins/feedpublisher/fulltext.php
+            Upload/inc/plugins/feedpublisher/operations.php
+            Upload/inc/plugins/feedpublisher/portability.php
+            Upload/inc/plugins/feedpublisher/publisher.php
+            Upload/inc/plugins/feedpublisher/queue.php
+            Upload/inc/tasks/feedpublisher.php
+            README.md
+            LICENSE
+            CHANGELOG.md
+          )
+          for required_entry in "${required_entries[@]}"; do
+            grep -F -x "$required_entry" <<< "$archive_contents" >/dev/null || {
+              echo "Archive is missing required entry: $required_entry" >&2
+              exit 1
+            }
+          done
+
+          if grep -E '^(tests|docs|\.git)/' <<< "$archive_contents" >/dev/null; then
+            echo "Archive contains development-only files." >&2
+            exit 1
+          fi
+
+          if [ -z "$GITEA_TOKEN" ]; then
+            echo "No workflow token is available to publish the release." >&2
+            exit 1
+          fi
+
+          api_base="$GITEA_API_URL/repos/$REPOSITORY"
+          release_json="$(curl -fsS -H "Authorization: token $GITEA_TOKEN" "$api_base/releases/tags/$release_tag" || true)"
+          if [ -z "$release_json" ]; then
+            release_json="$(jq -n \
+              --arg tag "$release_tag" \
+              --arg title "Feed Publisher $release_tag" \
+              --arg body "$release_body" \
+              '{tag_name:$tag,name:$title,body:$body,draft:false,prerelease:false}' |
+              curl -fsS -X POST \
+                -H "Authorization: token $GITEA_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d @- \
+                "$api_base/releases")"
+          else
+            release_id="$(echo "$release_json" | jq -r '.id')"
+            release_json="$(jq -n \
+              --arg title "Feed Publisher $release_tag" \
+              --arg body "$release_body" \
+              '{name:$title,body:$body,draft:false,prerelease:false}' |
+              curl -fsS -X PATCH \
+                -H "Authorization: token $GITEA_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d @- \
+                "$api_base/releases/$release_id")"
+          fi
+
+          release_id="$(echo "$release_json" | jq -r '.id')"
+          assets="$(curl -fsS -H "Authorization: token $GITEA_TOKEN" "$api_base/releases/$release_id/assets")"
+          existing_ids="$(echo "$assets" | jq -r --arg asset "$archive_name" '.[] | select(.name == $asset) | .id')"
+          for existing_id in $existing_ids; do
+            curl -fsS -X DELETE -H "Authorization: token $GITEA_TOKEN" "$api_base/releases/$release_id/assets/$existing_id" >/dev/null
+          done
+
+          curl -fsS -X POST \
+            -H "Authorization: token $GITEA_TOKEN" \
+            -F "attachment=@$archive" \
+            "$api_base/releases/$release_id/assets?name=$archive_name" >/dev/null
+
+          echo "Published $archive_name to Gitea release $release_tag."
