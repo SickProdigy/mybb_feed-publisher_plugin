@@ -4,7 +4,7 @@ Feed Publisher imports RSS, RDF, and Atom entries as MyBB threads. It uses
 MyBB's post data handler, converts remote HTML to safe MyCode, and does not
 require raw HTML to be enabled in posts.
 
-> **Status:** Stable release (`1.0.1`). Test upgrades and feed behavior on a
+> **Status:** Stable release (`1.0.2`). Test upgrades and feed behavior on a
 > non-production MyBB installation before deployment.
 
 ## Highlights
@@ -37,7 +37,10 @@ require raw HTML to be enabled in posts.
 
 New installations enable the scheduled task automatically. It runs every five
 minutes, but each feed is fetched and published only when its own intervals are
-due. New feed configurations are enabled by default.
+due. New feed configurations are enabled by default and initially check every
+240 minutes (about six times daily), publish every 360 minutes (about four times
+daily), and release at most one queued item per publishing run. Existing feed
+schedules are preserved during upgrades.
 
 ## How Publishing Works
 

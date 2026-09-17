@@ -295,7 +295,7 @@ function feedpublisher_portability_defaults($entry, $fid, $uid, $preserveEnabled
         'minimum_source_age_hours' => 0, 'maximum_source_age_days' => 0, 'require_entry_body' => 1,
         'require_entry_media' => 0, 'media_mode' => 'fallback_image', 'media_position' => 'top', 'publication_mode' => 'automatic', 'enabled' => 0,
         'fulltext_mode' => 'summary', 'fulltext_fallback' => 'feed', 'fulltext_summary_chars' => 600, 'fulltext_max_per_run' => 3,
-        'interval_minutes' => 60, 'publish_interval_minutes' => 60, 'max_posts_per_run' => 1, 'queue_order' => 'oldest',
+        'interval_minutes' => 240, 'publish_interval_minutes' => 360, 'max_posts_per_run' => 1, 'queue_order' => 'oldest',
         'publishing_paused' => 0, 'initial_policy' => 'latest', 'initial_limit' => 1, 'attribution_mode' => 'link',
         'post_header' => '', 'post_footer' => '', 'body_length_limit' => 0, 'continuation_mode' => 'none',
         'continuation_text' => 'Continue reading', 'remove_bylines' => 0, 'remove_source_links' => 0,

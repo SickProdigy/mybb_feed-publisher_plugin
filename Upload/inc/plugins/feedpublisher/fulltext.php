@@ -64,9 +64,11 @@ function feedpublisher_fulltext_extract($html, $url, &$metadata = null)
         $hint = strtolower($candidate->getAttribute('class') . ' ' . $candidate->getAttribute('id'));
         $explicit = in_array(strtolower($candidate->nodeName), array('article','main'), true)
             || $candidate->getAttribute('itemprop') === 'articleBody' || strtolower($candidate->getAttribute('role')) === 'main';
+        $focusedBody = preg_match('/(?:article|entry|post|story)[-_\s]?(?:body|content)|(?:body|content)[-_\s]?(?:article|entry|post|story)|rich[-_\s]?content/', $hint);
         if (!$explicit && $paragraphs < 2 && !preg_match('/article|content|entry|post|story/', $hint)) continue;
         $score = $textLength + $paragraphs * 120 + $headings * 40 - $linkText * 2 + ($explicit ? 1000 : 0);
         if (preg_match('/article|content|entry|post|story/', $hint)) $score += 300;
+        if ($focusedBody) $score += 3000;
         if (preg_match('/comment|footer|header|sidebar|related|share|social|promo|advert|menu/', $hint)) $score -= 1000;
         if ($score > $bestScore) { $best = $candidate; $bestScore = $score; }
     }

@@ -487,8 +487,8 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         'fulltext_summary_chars' => 600,
         'fulltext_max_per_run' => 3,
         'enabled' => 1,
-        'interval_minutes' => 60,
-        'publish_interval_minutes' => 60,
+        'interval_minutes' => 240,
+        'publish_interval_minutes' => 360,
         'max_posts_per_run' => 1,
         'queue_order' => 'oldest',
         'publishing_paused' => 0,
@@ -649,8 +649,8 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
     if (!empty($values['initialized_at'])) {
         $container->output_row('Initial scan completed', my_date('relative', (int) $values['initialized_at']) . '. Changing the policy requires confirmation and resets queued, awaiting-approval, skipped, and failed entries for the next discovery.', $form->generate_check_box('reset_initial_policy', 1, 'Confirm reset if the policy or recent count is changed.'));
     }
-    $container->output_row('Import interval <em>*</em>', 'Minutes between checks (minimum 5, maximum 10080).', $form->generate_numeric_field('interval_minutes', (int) $values['interval_minutes'], array('min' => 5, 'max' => 10080)));
-    $container->output_row('Publication interval <em>*</em>', 'Minimum minutes between publishing batches for this feed.', $form->generate_numeric_field('publish_interval_minutes', (int) $values['publish_interval_minutes'], array('min' => 5, 'max' => 10080)));
+    $container->output_row('Import interval <em>*</em>', 'Minutes between checks (minimum 5, maximum 10080). The 240-minute default checks about 6 times per day.', $form->generate_numeric_field('interval_minutes', (int) $values['interval_minutes'], array('min' => 5, 'max' => 10080)));
+    $container->output_row('Publication interval <em>*</em>', 'Minimum minutes between publishing batches. The 360-minute default allows about 4 publishing runs per day.', $form->generate_numeric_field('publish_interval_minutes', (int) $values['publish_interval_minutes'], array('min' => 5, 'max' => 10080)));
     $container->output_row('Maximum posts per run <em>*</em>', 'Maximum queued entries released for this feed in one task run (1 to 25). Use 1 for gradual posting.', $form->generate_numeric_field('max_posts_per_run', (int) $values['max_posts_per_run'], array('min' => 1, 'max' => 25)));
     $container->output_row('Queue order <em>*</em>', 'Choose which queued entry is published first.', $form->generate_select_box('queue_order', array('oldest' => 'Oldest first', 'newest' => 'Newest first'), $values['queue_order']));
     $container->output_row('Publication mode', 'Automatic creates threads according to the normal schedule. Require approval prepares and stores new entries without publishing until an administrator approves them in Review queue.',

@@ -404,6 +404,10 @@ $suite->test('portability validates targets and normalizes imported configuratio
     $t->assertSame(1, $record['require_entry_body']);
     $t->assertSame('fallback_image', $record['media_mode']);
     $t->assertSame('top', $record['media_position']);
+    $defaults = feedpublisher_portability_defaults(array('name' => 'Defaults', 'url' => 'https://example.com/defaults.xml'), 5, 9, false);
+    $t->assertSame(240, $defaults['interval_minutes']);
+    $t->assertSame(360, $defaults['publish_interval_minutes']);
+    $t->assertSame(1, $defaults['max_posts_per_run']);
     $mapping = feedpublisher_portability_resolve_mapping(
         array('destination_forum' => 'Gaming News', 'posting_username' => 'FeedBot'),
         array(0 => 'Fallback', 5 => 'Gaming News'), array(0 => 'Fallback', 9 => 'FeedBot'), 2, 3, true
@@ -469,6 +473,20 @@ $suite->test('full-text extraction selects article content and resolves safe rel
     $t->assertTrue($metadata['text_characters'] >= 200);
     $latin = "<p>Caf\xE9 article</p>";
     $t->assertContains('Caf' . "\xC3\xA9", feedpublisher_fulltext_normalize_encoding($latin, 'ISO-8859-1'));
+});
+
+$suite->test('full-text extraction prefers a focused article body over page furniture', function ($t) {
+    if (!extension_loaded('dom')) { $t->skip('PHP DOM is not installed.'); }
+    $html = '<html><body><main><article><div class="article-header"><p>Hero caption and source metadata should not be imported into the post body.</p></div>'
+        . '<div class="mc-rich-content"><p>This focused article body contains the real opening paragraph with enough useful words to qualify as substantial readable content.</p>'
+        . '<p>A second meaningful paragraph keeps the focused body eligible and should remain in the extracted article output for readers.</p></div>'
+        . '<section class="more-news"><p>More Official News</p><p>Unrelated article cards should not be imported.</p></section>'
+        . '</article></main></body></html>';
+    $metadata = array();
+    $article = feedpublisher_fulltext_extract($html, 'https://example.com/news/story.html', $metadata);
+    $t->assertContains('focused article body', $article);
+    $t->assertNotContains('Hero caption', $article);
+    $t->assertNotContains('More Official News', $article);
 });
 
 $suite->test('full-text extraction removes image lightbox controls without dropping article media', function ($t) {
@@ -646,7 +664,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $adminSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/admin.php');
     $publisherSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
-    $t->assertContains("'version' => '1.0.1'", $source);
+    $t->assertContains("'version' => '1.0.2'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);

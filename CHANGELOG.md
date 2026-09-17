@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2 - 2026-09-16
+
+- Prefer strongly identified article-body containers over broad page wrappers
+  during full-text extraction, avoiding page headers and related-content tails.
+- Change new-feed defaults to check every 240 minutes and publish one queued
+  item every 360 minutes; existing feed schedules remain unchanged.
+
 ## 1.0.1 - 2026-09-16
 
 - Add a per-feed title-removal regex applied before the existing plain title
