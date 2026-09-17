@@ -236,7 +236,18 @@ $suite->test('strict reconciliation fails safe for empty and truncated feeds', f
 $suite->test('safe content URLs reject executable schemes', function ($t) {
     $t->assertSame(false, feedpublisher_safe_content_url('javascript:alert(1)'));
     $t->assertSame(false, feedpublisher_safe_content_url('data:text/html,bad'));
+    $t->assertSame(false, feedpublisher_safe_content_url('https://user:pass@example.com/private'));
+    $t->assertSame(false, feedpublisher_safe_content_url('http://127.0.0.1/private'));
+    $t->assertSame(false, feedpublisher_safe_content_url('http://localhost/private'));
+    $t->assertSame(false, feedpublisher_safe_media_url('http://service.local/image.jpg'));
     $t->assertSame(true, feedpublisher_safe_content_url('https://example.com/a'));
+});
+
+$suite->test('remote fetches use browser-style request headers', function ($t) {
+    $t->assertContains('Firefox/', feedpublisher_fetch_user_agent());
+    $headers = feedpublisher_fetch_headers('text/html, application/xhtml+xml');
+    $t->assertContains('Accept: text/html, application/xhtml+xml', implode("\n", $headers));
+    $t->assertContains('Accept-Language: en-US,en;q=0.9', implode("\n", $headers));
 });
 
 $suite->test('support diagnostics redact secrets and optional URLs', function ($t) {
@@ -272,9 +283,10 @@ $suite->test('entry eligibility explains include, exclude, age, and content deci
     $t->assertSame(false, $blockedResult['eligible']);
     $t->assertContains('exclude title: sponsored', $blockedResult['reason']);
     $missingMedia = $item; $missingMedia['has_media'] = false;
-    $t->assertContains('media', feedpublisher_entry_eligibility($feed, $missingMedia)['reason']);
+    $t->assertContains('body text present: yes', feedpublisher_entry_eligibility($feed, $missingMedia)['reason']);
     $imageOnly = $item; $imageOnly['content'] = '<img src="https://example.com/image.jpg" alt="">';
-    $t->assertContains('body text', feedpublisher_entry_eligibility($feed, $imageOnly)['reason']);
+    $imageOnly['media'] = array(array('url' => 'https://example.com/image.jpg', 'kind' => 'image'));
+    $t->assertContains('media present: yes', feedpublisher_entry_eligibility($feed, $imageOnly)['reason']);
     $errors = array(); feedpublisher_eligibility_rules('include-regex title: ~[~', $errors);
     $t->assertSame(1, count($errors));
 });
@@ -285,13 +297,16 @@ $suite->test('feed test suggests title and summary full text defaults', function
             array('url' => 'https://example.com/image.jpg', 'kind' => 'image'),
         )),
         array('url' => 'https://example.com/b', 'content' => str_repeat('complete ', 100), 'media' => array()),
+        array('url' => 'https://example.com/c', 'content' => '<p>' . str_repeat('teaser ', 100) . '</p><p>Read the full article on example.com</p>', 'media' => array()),
     ));
     $t->assertSame('Example Feed', $defaults['name']);
-    $t->assertSame('ignore', $defaults['media_mode']);
+    $t->assertSame('fallback_image', $defaults['media_mode']);
     $t->assertSame('summary', $defaults['fulltext_mode']);
+    $t->assertSame('retry_skip', $defaults['fulltext_fallback']);
     $t->assertSame(1, $defaults['media_items']);
     $t->assertSame(1, $defaults['media_urls']);
-    $t->assertSame(1, $defaults['short_items']);
+    $t->assertSame(2, $defaults['short_items']);
+    $t->assertSame(1, $defaults['teaser_items']);
 });
 
 $suite->test('title prefix preserves MyBB 85-character subject limit', function ($t) {
@@ -329,28 +344,40 @@ $suite->test('default post composition preserves the existing body behavior', fu
     $post = feedpublisher_compose_post(array('attribution_mode' => 'none'), array('title' => 'Title', 'content' => '[b]Complete body[/b]'));
     $t->assertSame('[b]Complete body[/b]', $post['body']);
     $t->assertSame(false, $post['truncated']);
+    $media = array(array('url' => 'https://example.com/image.jpg', 'kind' => 'image'));
+    $bottom = feedpublisher_compose_post(array('attribution_mode' => 'none', 'media_mode' => 'fallback_image', 'media_position' => 'bottom'), array('title' => 'Title', 'content' => 'Body', 'media' => $media));
+    $top = feedpublisher_compose_post(array('attribution_mode' => 'none', 'media_mode' => 'fallback_image', 'media_position' => 'top'), array('title' => 'Title', 'content' => 'Body', 'media' => $media));
+    $t->assertSame("Body\n\n[img]https://example.com/image.jpg[/img]", $bottom['body']);
+    $t->assertSame("[img]https://example.com/image.jpg[/img]\n\nBody", $top['body']);
 });
 
 $suite->test('media composition hotlinks only images and safely links other media', function ($t) {
     $media = array(
         array('url' => 'https://example.com/image.jpg', 'kind' => 'image'),
         array('url' => 'https://example.com/video.mp4', 'kind' => 'video'),
+        array('url' => 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'kind' => 'video'),
         array('url' => 'javascript:alert(1)', 'kind' => 'image'),
         array('url' => 'http://127.0.0.1/private.jpg', 'kind' => 'image'),
     );
     $hotlinks = feedpublisher_compose_media($media, 'hotlink');
     $t->assertContains('[img]https://example.com/image.jpg[/img]', $hotlinks);
     $t->assertContains('[url=https://example.com/video.mp4]View video[/url]', $hotlinks);
+    $t->assertContains('[video=youtube]https://www.youtube.com/watch?v=dQw4w9WgXcQ[/video]', $hotlinks);
     $t->assertNotContains('javascript:', $hotlinks);
     $t->assertNotContains('127.0.0.1', $hotlinks);
     $links = feedpublisher_compose_media($media, 'links');
     $t->assertContains('[url=https://example.com/image.jpg]View image[/url]', $links);
+    $fallback = feedpublisher_compose_media($media, 'fallback_image', 'Body without an image');
+    $t->assertSame('[img]https://example.com/image.jpg[/img]', $fallback);
+    $t->assertSame('', feedpublisher_compose_media($media, 'fallback_image', '[img]https://example.com/existing.jpg[/img]'));
     $t->assertSame('', feedpublisher_compose_media($media, 'ignore'));
 });
 
 $suite->test('portability validates targets and normalizes imported configuration', function ($t) {
     $t->assertSame(true, feedpublisher_portability_url_valid('https://example.com/feed.xml'));
     $t->assertSame(false, feedpublisher_portability_url_valid('http://127.0.0.1/feed'));
+    $t->assertSame(false, feedpublisher_portability_url_valid('http://localhost/feed'));
+    $t->assertSame(false, feedpublisher_portability_url_valid('http://service.local/feed'));
     $t->assertSame(false, feedpublisher_portability_url_valid('https://user:pass@example.com/feed'));
     $parsed = feedpublisher_portability_parse(json_encode(array('format' => 'mybb-feed-publisher-config', 'version' => 1,
         'feeds' => array(array('name' => 'Imported', 'url' => 'https://example.com/feed', 'interval_minutes' => 1, 'enabled' => 1)))));
@@ -361,6 +388,9 @@ $suite->test('portability validates targets and normalizes imported configuratio
     $t->assertSame(5, $record['interval_minutes']);
     $t->assertSame(0, $record['enabled']);
     $t->assertSame(0, $record['thread_prefix_id']);
+    $t->assertSame(1, $record['require_entry_body']);
+    $t->assertSame('fallback_image', $record['media_mode']);
+    $t->assertSame('top', $record['media_position']);
     $mapping = feedpublisher_portability_resolve_mapping(
         array('destination_forum' => 'Gaming News', 'posting_username' => 'FeedBot'),
         array(0 => 'Fallback', 5 => 'Gaming News'), array(0 => 'Fallback', 9 => 'FeedBot'), 2, 3, true
@@ -378,6 +408,12 @@ $suite->test('portability validates targets and normalizes imported configuratio
 $suite->test('full-text planning applies fallback and defers beyond the request bound', function ($t) {
     $feed = array('id' => 0, 'identity_strategy' => 'guid_link', 'fulltext_mode' => 'always',
         'fulltext_fallback' => 'feed', 'fulltext_summary_chars' => 600, 'fulltext_max_per_run' => 1);
+    $summaryFeed = $feed;
+    $summaryFeed['fulltext_mode'] = 'summary';
+    $longTeaser = array('state' => 'queued', 'item' => array('key' => 'teaser', 'title' => 'Teaser', 'url' => 'javascript:bad',
+        'content' => str_repeat('teaser ', 100) . ' Read the full article on example.com'));
+    $summaryResult = feedpublisher_fulltext_prepare_plan($summaryFeed, array($longTeaser));
+    $t->assertSame('fallback', $summaryResult[0]['item']['_fulltext']['status']);
     $plan = array(
         array('state' => 'queued', 'item' => array('key' => 'one', 'title' => 'One', 'url' => 'javascript:bad', 'content' => 'Summary')),
         array('state' => 'queued', 'item' => array('key' => 'two', 'title' => 'Two', 'url' => 'https://example.com/two', 'content' => 'Summary')),
@@ -391,6 +427,15 @@ $suite->test('full-text planning applies fallback and defers beyond the request 
     $feed['fulltext_fallback'] = 'skip';
     $skipped = feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
     $t->assertSame('skipped', $skipped[0]['state']);
+    $feed['fulltext_fallback'] = 'retry_skip';
+    $feed['fetch_failures'] = 2;
+    $t->expectException('FeedPublisherException', function () use ($feed, $plan) {
+        feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
+    });
+    $feed['fetch_failures'] = 3;
+    $retrySkipped = feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
+    $t->assertSame('skipped', $retrySkipped[0]['state']);
+    $t->assertContains('Retry limit reached', $retrySkipped[0]['item']['_fulltext']['message']);
     $feed['fulltext_fallback'] = 'retry';
     $t->expectException('FeedPublisherException', function () use ($feed, $plan) {
         feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
@@ -569,6 +614,16 @@ $suite->test('unsafe HTML is removed before MyCode conversion', function ($t) {
     $t->assertNotContains('script', strtolower($mycode));
     $t->assertNotContains('javascript:', strtolower($mycode));
     $t->assertNotContains('onerror', strtolower($mycode));
+    $injected = feedpublisher_html_to_mycode('<p>[img]http://127.0.0.1/private.jpg[/img]</p><p><a href="https://example.com/a]bad">ok</a></p>');
+    $t->assertNotContains('[img]http://127.0.0.1/private.jpg[/img]', $injected);
+    $t->assertContains('&#91;img&#93;http://127.0.0.1/private.jpg&#91;/img&#93;', $injected);
+    $t->assertContains('[url=https://example.com/a%5Dbad]ok[/url]', $injected);
+    $nintendo = feedpublisher_html_to_mycode('<p><strong>New hero, map and more!</strong></p><p>Apart from the <a href="https://www.nintendolife.com/games/nintendo-switch-2/diablo_iv_age_of_hatred_collection">Diablo</a> news, the team shared more.</p><p>Read the <a href="https://www.nintendolife.com/news/2026/09/overwatch-announces-whats-next-as-it-reaches-the-end-of-its-first-year-long-story-arc">full article on nintendolife.com</a></p>');
+    $t->assertContains('[url=https://www.nintendolife.com/games/nintendo-switch-2/diablo_iv_age_of_hatred_collection]Diablo[/url]', $nintendo);
+    $t->assertContains('[url=https://www.nintendolife.com/news/2026/09/overwatch-announces-whats-next-as-it-reaches-the-end-of-its-first-year-long-story-arc]full article on nintendolife.com[/url]', $nintendo);
+    $youtube = feedpublisher_html_to_mycode('<p>Watch <a href="https://youtu.be/dQw4w9WgXcQ">the trailer</a> and visit <a href="https://www.youtube.com/@NintendoAmerica">the channel</a>.</p>');
+    $t->assertContains('[video=youtube]https://youtu.be/dQw4w9WgXcQ[/video]', $youtube);
+    $t->assertContains('[url=https://www.youtube.com/@NintendoAmerica]the channel[/url]', $youtube);
     $t->assertContains('[b]text[/b]', $mycode);
     $t->assertContains('[url=https://example.com/good]good link[/url]', $mycode);
 });
@@ -578,6 +633,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $adminSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/admin.php');
     $publisherSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
+    $t->assertContains("'version' => '1.0.0'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
@@ -589,6 +645,10 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("'enabled' => 1", $source);
     $t->assertContains("`require_entry_body` tinyint(1) NOT NULL DEFAULT 1", $source);
     $t->assertContains("'require_entry_body' => 1", $adminSource);
+    $t->assertContains("`media_mode` varchar(16) NOT NULL DEFAULT 'fallback_image'", $source);
+    $t->assertContains("'media_mode' => 'fallback_image'", $adminSource);
+    $t->assertContains("`media_position` varchar(8) NOT NULL DEFAULT 'top'", $source);
+    $t->assertContains("'media_position' => 'top'", $adminSource);
     $t->assertContains("fetch_next_run", $source);
     $t->assertContains("(int) \$existing['nextrun'] < TIME_NOW", $source);
     $t->assertContains("feedpublisher_reschedule_task", $adminSource);

@@ -35,12 +35,6 @@ function feedpublisher_publish_queued_item($feed, $item)
         throw new RuntimeException('The configured posting user is banned.');
     }
 
-    feedpublisher_prepare_publication_request_context($user);
-    $permissions = forum_permissions((int) $forum['fid'], (int) $user['uid']);
-    if (empty($permissions['canview']) || empty($permissions['canpostthreads'])) {
-        throw new RuntimeException('The configured posting user cannot create threads in the destination forum.');
-    }
-
     $post = feedpublisher_compose_post($feed, $item);
     $subject = $post['title'];
     $message = $post['body'];
@@ -51,13 +45,20 @@ function feedpublisher_publish_queued_item($feed, $item)
     if ($threadPrefixId && !feedpublisher_thread_prefix_is_available($threadPrefixId, $forum['fid'], $user)) {
         throw new RuntimeException('The selected MyBB thread prefix is no longer available to the posting user in the destination forum.');
     }
-    require_once MYBB_ROOT . 'inc/datahandlers/post.php';
-    $originalUser = $mybb->user;
-    $originalUsergroup = $mybb->usergroup;
+    $groupIds = feedpublisher_user_group_ids($user);
+    $originalUser = isset($mybb->user) ? $mybb->user : array();
+    $originalUsergroup = isset($mybb->usergroup) ? $mybb->usergroup : array();
     try {
-        $mybb->user = $user;
-        $mybb->usergroup = usergroup_permissions((int) $user['usergroup']);
+        feedpublisher_prepare_publication_request_context($user, $groupIds);
+        $permissions = forum_permissions((int) $forum['fid'], (int) $user['uid'], $groupIds);
+        if (empty($permissions['canview']) || empty($permissions['canpostthreads'])) {
+            throw new RuntimeException('The configured posting user cannot create threads in the destination forum.');
+        }
 
+        $mybb->user = $user;
+        $mybb->usergroup = usergroup_permissions($groupIds);
+
+        require_once MYBB_ROOT . 'inc/datahandlers/post.php';
         $handler = new PostDataHandler('insert');
         $handler->action = 'thread';
         $handler->set_data(array(
@@ -93,7 +94,7 @@ function feedpublisher_publish_queued_item($feed, $item)
     return $result;
 }
 
-function feedpublisher_prepare_publication_request_context($user)
+function feedpublisher_prepare_publication_request_context($user, $groupIds = null)
 {
     global $mybb;
 
@@ -104,15 +105,8 @@ function feedpublisher_prepare_publication_request_context($user)
         $_SERVER['SERVER_ADDR'] = '127.0.0.1';
     }
 
-    if (!isset($mybb->user) || !is_array($mybb->user)) {
-        $mybb->user = array();
-    }
-    if (empty($mybb->user['uid'])) {
-        $mybb->user = $user;
-    }
-    if (!isset($mybb->usergroup) || !is_array($mybb->usergroup)) {
-        $mybb->usergroup = usergroup_permissions((int) $user['usergroup']);
-    }
+    $mybb->user = $user;
+    $mybb->usergroup = usergroup_permissions($groupIds === null ? feedpublisher_user_group_ids($user) : $groupIds);
 }
 
 function feedpublisher_normalize_title_prefix($prefix)
@@ -242,14 +236,15 @@ function feedpublisher_compose_post($feed, $item)
     $parts = array();
     $header = feedpublisher_render_template(isset($feed['post_header']) ? $feed['post_header'] : '', $feed, $item);
     if (trim($header) !== '') $parts[] = trim($header);
-    $parts[] = $body;
     $media = isset($item['media']) && is_array($item['media']) ? $item['media'] : array();
     if (!$media && !empty($item['media_json'])) {
         $decoded = json_decode($item['media_json'], true);
         if (is_array($decoded)) $media = $decoded;
     }
-    $mediaBlock = feedpublisher_compose_media($media, isset($feed['media_mode']) ? $feed['media_mode'] : 'ignore');
-    if ($mediaBlock !== '') $parts[] = $mediaBlock;
+    $mediaBlock = feedpublisher_compose_media($media, isset($feed['media_mode']) ? $feed['media_mode'] : 'ignore', $body);
+    if ($mediaBlock !== '' && isset($feed['media_position']) && $feed['media_position'] === 'top') $parts[] = $mediaBlock;
+    $parts[] = $body;
+    if ($mediaBlock !== '' && (!isset($feed['media_position']) || $feed['media_position'] !== 'top')) $parts[] = $mediaBlock;
     if ($truncated && isset($feed['continuation_mode']) && $feed['continuation_mode'] === 'source_link') {
         $url = isset($item['source_url']) ? $item['source_url'] : (isset($item['url']) ? $item['url'] : '');
         if (feedpublisher_safe_content_url($url)) {
@@ -264,7 +259,12 @@ function feedpublisher_compose_post($feed, $item)
     return array('title' => feedpublisher_build_subject($item['title'], isset($feed['title_prefix']) ? $feed['title_prefix'] : ''), 'body' => $body, 'truncated' => $truncated);
 }
 
-function feedpublisher_compose_media($media, $mode)
+function feedpublisher_body_has_image($body)
+{
+    return preg_match('/\[img(?:=[^\]\r\n]*)?\][^\[]+\[\/img\]/i', (string) $body) === 1;
+}
+
+function feedpublisher_compose_media($media, $mode, $body = '')
 {
     if ($mode === 'ignore' || !is_array($media)) return '';
     $output = array();
@@ -274,8 +274,14 @@ function feedpublisher_compose_media($media, $mode)
         if (!feedpublisher_safe_media_url($url) || isset($seen[$url])) continue;
         $url = str_replace(array('[', ']'), array('%5B', '%5D'), $url);
         $kind = isset($entry['kind']) ? $entry['kind'] : 'file';
-        if ($mode === 'hotlink' && $kind === 'image') {
+        if ($mode === 'fallback_image') {
+            if ($kind !== 'image' || feedpublisher_body_has_image($body)) continue;
             $output[] = '[img]' . $url . '[/img]';
+            break;
+        } elseif ($mode === 'hotlink' && $kind === 'image') {
+            $output[] = '[img]' . $url . '[/img]';
+        } elseif ($kind === 'video' && feedpublisher_youtube_video_url($url)) {
+            $output[] = '[video=youtube]' . $url . '[/video]';
         } else {
             $label = $kind === 'video' ? 'View video' : ($kind === 'image' ? 'View image' : 'View media');
             $output[] = '[url=' . $url . ']' . $label . '[/url]';

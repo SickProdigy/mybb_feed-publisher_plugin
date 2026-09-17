@@ -1,11 +1,11 @@
 # Changelog
 
-## 0.1.33 - 2026-09-13
+## 1.0.0 - 2026-09-16
 
 - Validate Initial recent count only when the Recent count initial-import
   policy is selected.
-- Rename feed media controls to Extra feed media and restore the default to not
-  appending extra media metadata; body images and links remain unaffected.
+- Rename feed media controls to Extra feed media; body images and links remain
+  unaffected by extra media handling.
 - Enable the body-text eligibility check by default so title-only feed entries
   are filtered unless an admin opts into allowing them; image-only entries need
   that option disabled.
@@ -13,6 +13,28 @@
   image lightbox/download controls, share widgets, newsletter/ad blocks, and
   trailing related/story navigation while preserving article images and ordinary
   links.
+- Add an Extra feed media mode that appends the first discovered image only when
+  the converted body has no image, and make eligibility rejection reasons report
+  whether body text and media were present.
+- Add per-feed extra-media placement so appended feed media can appear before or
+  after the imported body, defaulting new feeds to before the body.
+- Default new feeds and connection suggestions to the image-fallback extra media
+  mode.
+- Default linked full-article retrieval to summary mode and treat explicit
+  read-more/full-article feed teasers as needing linked-article retrieval.
+- Suggest retrying teaser entries a few times before marking them seen without
+  publishing when their linked full article cannot be extracted.
+- Split the add/edit feed form into consistent sections and move Publication
+  mode next to Pause publishing.
+- Separate OPML and full-configuration export actions on the Import / export
+  page with clearer descriptions.
+- Harden imported content conversion by escaping raw feed-text MyCode brackets,
+  rejecting private/local content and media URLs, and disabling cURL proxy use
+  for DNS-pinned fetches.
+- Use a Firefox-style request identity for remote feed, discovery, and linked
+  article fetches while keeping the existing public-address and no-proxy limits.
+- Convert YouTube video links in imported body content and feed media to MyBB
+  `[video=youtube]` embeds.
 
 ## 0.1.32 - 2026-09-13
 

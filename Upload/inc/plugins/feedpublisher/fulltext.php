@@ -199,6 +199,14 @@ function feedpublisher_fulltext_failure($feed, &$entry, $message)
         $entry['item']['_disposition'] = 'skipped';
     } elseif ($fallback === 'retry') {
         throw new FeedPublisherException('fulltext', $message);
+    } elseif ($fallback === 'retry_skip') {
+        $attempts = isset($feed['fetch_failures']) ? (int) $feed['fetch_failures'] : 0;
+        if ($attempts < 3) {
+            throw new FeedPublisherException('fulltext', $message . ' Full-article retry ' . ($attempts + 1) . ' of 3 scheduled before marking the entry seen.');
+        }
+        $entry['state'] = 'skipped';
+        $entry['item']['_disposition'] = 'skipped';
+        $entry['item']['_fulltext']['message'] = feedpublisher_safe_log_text($message . ' Retry limit reached; entry marked seen without publishing.');
     }
 }
 
@@ -218,7 +226,8 @@ function feedpublisher_fulltext_prepare_plan($feed, $plan)
         $identity = feedpublisher_derive_item_identity($feed, $item);
         $item['_identity_override'] = $identity;
         $plainLength = my_strlen(trim(preg_replace('/\s+/u', ' ', strip_tags((string) $item['content']))));
-        $needs = $entry['state'] === 'queued' && ($mode === 'always' || $plainLength < $threshold);
+        $partialFeedContent = feedpublisher_feed_content_looks_partial((string) $item['content'], $threshold);
+        $needs = $entry['state'] === 'queued' && ($mode === 'always' || $partialFeedContent);
         if (!$needs) {
             $item['_fulltext'] = array('source' => 'feed', 'status' => 'not-needed', 'message' => 'Feed content retained (' . $plainLength . ' text characters).');
             unset($item);

@@ -4,8 +4,8 @@ Feed Publisher imports RSS, RDF, and Atom entries as MyBB threads. It uses
 MyBB's post data handler, converts remote HTML to safe MyCode, and does not
 require raw HTML to be enabled in posts.
 
-> **Status:** Development preview (`0.1.33`). Test upgrades and feed behavior on
-> a non-production MyBB installation before deployment.
+> **Status:** Stable release (`1.0.0`). Test upgrades and feed behavior on a
+> non-production MyBB installation before deployment.
 
 ## Highlights
 
@@ -79,8 +79,10 @@ or publishing anything. The result includes safe fetch metadata, detected feed
 format and encoding, item count, and newest valid source date. Response bodies
 are never displayed. Successful tests apply detected defaults on the same form:
 the parsed feed title and summary-only linked full-article retrieval when feed
-entries look like short teasers. If the result says full-article retrieval is
-not needed, it is not automatically selected.
+entries look like short teasers or include "read the full article" style links.
+For explicit read-more/full-article teaser feeds, it also defaults full-article
+failure to retrying a few times before marking the entry seen without
+publishing.
 
 Use **Preview** to run the production fetch, parse, cleanup, conversion, and
 composition path without writing plugin or forum data. Preview also reports
@@ -117,7 +119,7 @@ Optional checks can also require a source-age range, body text, or image or
 media metadata. The body-text check looks for text after HTML tags are removed,
 so image-only entries need that option disabled. Eligibility runs before
 initial-policy selection and queue staging, and dry run reports the exact
-decision.
+decision, including whether rejected entries had body text or media present.
 
 Filtered and initially skipped identities are stored independently from
 removable queue history. Changing filters requires explicit re-evaluation and
@@ -157,11 +159,14 @@ publication time.
 ## Media
 
 Feed Publisher recognizes RSS enclosures, Media RSS content and thumbnails, and
-Atom enclosure links. Each feed can ignore media, append safe ordinary links, or
-hotlink images with MyBB's `[img]` code. Videos and unknown file types remain
-ordinary links. This setting controls extra feed metadata outside the entry
-body; body images and links are converted normally. New feeds default to not
-appending extra media.
+Atom enclosure links. Each feed can ignore media, append the first extra image
+only when the converted body has no `[img]`, append safe ordinary links, or
+hotlink images with MyBB's `[img]` code. Videos and unknown file types become
+ordinary links in link and hotlink modes, and are ignored by the image-fallback
+mode. This setting controls extra feed metadata outside the entry body; body
+images and links are converted normally. New feeds default to appending the
+first extra image only when the body has no image. Extra media can be placed
+before or after the imported body; new feeds default to before the body.
 
 At most 10 distinct HTTP/HTTPS media URLs are retained per entry. The plugin
 does not download attachments, inspect remote files, create local media, or emit
@@ -170,9 +175,13 @@ iframe/embed HTML.
 ## Linked Full Articles
 
 Optional linked full-article retrieval can replace short feed summaries with
-content extracted from the public article URL. It is disabled by default and
-can run when feed text is below a configurable threshold (600 characters by
-default) or for every new entry.
+content extracted from the public article URL. New feeds default to summary
+mode, which runs when feed text is below a configurable threshold (600
+characters by default) or when the feed content looks like a teaser with a
+"read the full article" or "continue reading" link. It can also run for every
+new entry. Explicit read-more/full-article teaser feeds discovered by Test
+connection default to retrying extraction a few times, then skipping the entry
+when the linked article still cannot be extracted.
 
 Article extraction:
 
@@ -184,9 +193,9 @@ Article extraction:
 - Scores article/main containers and requires substantial content
 - Resolves relative links before normal cleanup and MyCode conversion
 
-Failure can retain the feed content, mark the entry seen, or fail discovery for
-retry. A configurable limit of 1-10 article requests per run defers overflow
-without losing entries.
+Failure can retain the feed content, mark the entry seen, retry a few times and
+then mark seen, or fail discovery for retry. A configurable limit of 1-10 article
+requests per run defers overflow without losing entries.
 
 ## Thread Dates
 

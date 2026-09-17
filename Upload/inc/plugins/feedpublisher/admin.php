@@ -186,7 +186,7 @@ function feedpublisher_admin_diagnostics()
     if (!$feeds) { $feedTable->construct_cell('No feeds configured.', array('colspan' => 6)); $feedTable->construct_row(); }
     $feedTable->output('Feed health');
 
-    echo '<form method="post" action="index.php?module=config/feedpublisher&amp;action=diagnostics"><input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '"><input type="hidden" name="diagnostic_run" value="1"><p><input class="button" type="submit" value="Run fetch/parse diagnostics"> <small>Checks at most 10 feeds. Does not save, queue, reconcile, clean up, or publish.</small></p></form>';
+    echo '<form method="post" action="index.php?module=config/feedpublisher&amp;action=diagnostics"><input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '"><input type="hidden" name="diagnostic_run" value="1"><p><input class="button" type="submit" value="Test feed fetch/parse"> <small>Checks at most 10 feeds and shows the result below. Does not refresh event logs, save, queue, reconcile, clean up, or publish.</small></p></form>';
     if ($runResults) {
         $testTable = new Table; $testTable->construct_header('Feed'); $testTable->construct_header('Result'); $testTable->construct_header('Details');
         foreach ($runResults as $row) {
@@ -196,7 +196,7 @@ function feedpublisher_admin_diagnostics()
             $testTable->construct_cell($result['ok'] ? htmlspecialchars_uni($result['parse']['format']) . ', ' . (int) $result['items'] . ' entries' : htmlspecialchars_uni($result['error']));
             $testTable->construct_row();
         }
-        $testTable->output('Diagnostic run');
+        $testTable->output('Feed health check');
     }
 
     $feedFilter = max(0, $mybb->get_input('log_feed', MyBB::INPUT_INT));
@@ -216,7 +216,7 @@ function feedpublisher_admin_diagnostics()
         $logTable->construct_cell(htmlspecialchars_uni($event['message'])); $logTable->construct_row();
     }
     if ($logTable->num_rows() === 0) { $logTable->construct_cell('No matching diagnostic events.', array('colspan' => 5)); $logTable->construct_row(); }
-    $logTable->output('Diagnostic events (30 days / 1,000 rows maximum)');
+    $logTable->output('Diagnostic events (auto-pruned after 30 days or about 1,000 rows)');
 
     $showUrls = $mybb->get_input('show_urls', MyBB::INPUT_INT) ? true : false;
     $report = array('Feed Publisher support report', 'Plugin: ' . feedpublisher_info()['version'], 'MyBB: ' . (defined('MYBB_VERSION') ? MYBB_VERSION : 'unknown'), 'PHP: ' . PHP_VERSION,
@@ -262,6 +262,7 @@ function feedpublisher_admin_queue_status()
         $publication = !empty($feed['publishing_paused'])
             ? '<strong>Paused</strong>'
             : 'Active';
+        $publication .= '<br><small>Last publication: ' . ((int) $feed['last_published'] > 0 ? my_date('relative', (int) $feed['last_published']) : 'Never') . '</small>';
         $publication .= '<br><small>Batch: ' . (int) $feed['max_posts_per_run'] . ' &middot; Order: ' . htmlspecialchars_uni($feed['queue_order']) . '</small>';
         $publication .= '<br><small>Next eligible publication: ' . ($nextPublish > TIME_NOW ? my_date('normal', $nextPublish) : 'Now') . '</small>';
         $publication .= '<br><small>Next post: ' . ($nextPost ? ($nextPost <= TIME_NOW ? 'Now' : my_date('normal', $nextPost)) : 'None queued') . '</small>';
@@ -353,7 +354,8 @@ function feedpublisher_admin_list()
             : 'Initial scan: ' . my_date('relative', (int) $feed['initialized_at']);
         $initialStatus .= '<br>Next post: ' . ($nextPost ? ($nextPost <= TIME_NOW ? 'Now' : my_date('normal', $nextPost)) : 'None queued');
         if ($recentError) {
-            $initialStatus .= '<br><small style="color:#a00">Last publish error: ' . htmlspecialchars_uni(feedpublisher_safe_diagnostic_text($recentError['last_error'])) . '</small>';
+            $state = !empty($recentError['state']) ? $recentError['state'] : 'queue item';
+            $initialStatus .= '<br><small style="color:#a00">Recent queue warning (' . htmlspecialchars_uni($state) . '): ' . htmlspecialchars_uni(feedpublisher_safe_diagnostic_text($recentError['last_error'])) . '</small>';
         }
         $controls = '<a href="index.php?module=config/feedpublisher&amp;action=edit&amp;id=' . $id . '">Edit</a>'
             . ' &middot; <a href="index.php?module=config/feedpublisher&amp;action=preview&amp;id=' . $id . '">Preview</a>'
@@ -476,9 +478,10 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         'maximum_source_age_days' => 0,
         'require_entry_body' => 1,
         'require_entry_media' => 0,
-        'media_mode' => 'ignore',
+        'media_mode' => 'fallback_image',
+        'media_position' => 'top',
         'publication_mode' => 'automatic',
-        'fulltext_mode' => 'disabled',
+        'fulltext_mode' => 'summary',
         'fulltext_fallback' => 'feed',
         'fulltext_summary_chars' => 600,
         'fulltext_max_per_run' => 3,
@@ -506,12 +509,16 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         $values['name'] = my_substr(trim($mybb->get_input('feed_name')), 0, 150);
     }
     $suggestedMediaMode = $mybb->get_input('feed_media_mode');
-    if (in_array($suggestedMediaMode, array('ignore', 'links', 'hotlink'), true)) {
+    if (in_array($suggestedMediaMode, array('ignore', 'fallback_image', 'links', 'hotlink'), true)) {
         $values['media_mode'] = $suggestedMediaMode;
     }
     $suggestedFulltextMode = $mybb->get_input('feed_fulltext_mode');
     if (in_array($suggestedFulltextMode, array('disabled', 'summary', 'always'), true)) {
         $values['fulltext_mode'] = $suggestedFulltextMode;
+    }
+    $suggestedFulltextFallback = $mybb->get_input('feed_fulltext_fallback');
+    if (in_array($suggestedFulltextFallback, array('feed', 'skip', 'retry', 'retry_skip'), true)) {
+        $values['fulltext_fallback'] = $suggestedFulltextFallback;
     }
 
     $page->add_breadcrumb_item('Feed Publisher', 'index.php?module=config/feedpublisher');
@@ -565,6 +572,9 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         . ' ' . $form->generate_submit_button('Test connection', array('name' => 'test_connection'))
         . ' ' . $form->generate_submit_button('Find feeds', array('name' => 'find_feeds')));
     $container->output_row('Name', 'A descriptive name shown in the Admin CP and task logs. Leave blank to generate one from the feed URL.', $form->generate_text_box('name', $values['name']));
+    $container->end();
+
+    $container = new FormContainer('Destination and identity');
     $refresh = "this.form.elements['refresh_prefixes'].click();";
     $container->output_row('Destination forum <em>*</em>', 'New entries will be published to this forum. Changing it refreshes the available MyBB prefixes.', $form->generate_select_box('fid', $forums, (int) $values['fid'], array('onchange' => $refresh)));
     $container->output_row('Posting user <em>*</em>', 'The MyBB account used as the post author. Changing it refreshes the prefixes this user may apply.', $form->generate_select_box('uid', $users, (int) $values['uid'], array('onchange' => $refresh)));
@@ -591,6 +601,9 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         . '<br>' . $form->generate_check_box('confirm_dedupe_pruning', 1, 'I understand that pruning duplicate history can allow old entries to be republished.'));
     $container->output_row('Strict source reconciliation', 'After a successful non-empty scan, reject unpublished queued entries no longer present only when the feed has not unexpectedly shrunk. Published MyBB content is never changed.',
         $form->generate_check_box('strict_reconciliation', 1, 'Reject missing unpublished queue entries', array('checked' => !empty($values['strict_reconciliation']))));
+    $container->end();
+
+    $container = new FormContainer('Entry content and filtering');
     $container->output_row('Entry eligibility rules', 'Optional, one per line. Examples: include title: giveaway; exclude url: /sponsored/; include category: releases; exclude body: pre-order; include-regex title: ~free (game|weekend)~i. Any matching exclusion rejects; when includes exist, at least one must match.',
         $form->generate_text_area('eligibility_rules', $values['eligibility_rules']));
     $container->output_row('Source age eligibility', '0 disables a limit. Entries without a valid source date are rejected when either age filter is enabled.',
@@ -600,26 +613,35 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         $form->generate_check_box('require_entry_body', 1, 'Require body text', array('checked' => !empty($values['require_entry_body']))) . '<br>'
         . $form->generate_check_box('require_entry_media', 1, 'Require an image, enclosure, or Media RSS item', array('checked' => !empty($values['require_entry_media']))));
     $container->output_row('Extra feed media', 'Optional enclosure, Media RSS, thumbnail, or Atom enclosure URLs outside the entry body. Body images and links are still converted normally. Extra images can be shown; videos and other files become ordinary links. No files are downloaded and no embeds or iframes are created.',
-        $form->generate_select_box('media_mode', array('ignore' => 'Do not append extra media (default)', 'links' => 'Append extra media links', 'hotlink' => 'Append images; link videos and files'), $values['media_mode']));
-    $container->output_row('Publication mode', 'Automatic creates threads according to the normal schedule. Require approval prepares and stores new entries without publishing until an administrator approves them in Review queue.',
-        $form->generate_select_box('publication_mode', array('automatic' => 'Publish automatically', 'approval' => 'Require administrator approval'), $values['publication_mode']));
-    $container->output_row('Linked full article', 'Disabled keeps feed content. Summary-only mode visits the linked page only when the feed body is shorter than the threshold. Always attempts the linked page for every new publishable entry. Requests use the same public-address, DNS pinning, TLS, redirect, timeout, MIME, and 2 MiB limits as feed fetching.',
-        $form->generate_select_box('fulltext_mode', array('disabled' => 'Disabled (use feed content)', 'summary' => 'Retrieve when feed content is short', 'always' => 'Always retrieve linked article'), $values['fulltext_mode']));
+        $form->generate_select_box('media_mode', array('fallback_image' => 'Append first image only when body has none (default)', 'ignore' => 'Do not append extra media', 'links' => 'Append extra media links', 'hotlink' => 'Append images; link videos and files'), $values['media_mode']));
+    $container->output_row('Extra media placement', 'Choose where extra feed media is placed relative to the imported body. Body images keep their original position.',
+        $form->generate_select_box('media_position', array('top' => 'Before the body (default)', 'bottom' => 'After the body'), $values['media_position']));
+    $container->output_row('Linked full article', 'Disabled keeps feed content. Summary mode visits the linked page when the feed body is shorter than the threshold or looks like a read-more teaser. Always attempts the linked page for every new publishable entry. Requests use the same public-address, DNS pinning, TLS, redirect, timeout, MIME, and 2 MiB limits as feed fetching.',
+        $form->generate_select_box('fulltext_mode', array('disabled' => 'Disabled (use feed content)', 'summary' => 'Retrieve when feed content is short or a teaser', 'always' => 'Always retrieve linked article'), $values['fulltext_mode']));
     $container->output_row('Full-article limits', 'Threshold counts plain feed-text characters. At most 1 to 10 new article pages are fetched per discovery run; remaining entries wait for a later run.',
         'Summary threshold: ' . $form->generate_numeric_field('fulltext_summary_chars', (int) $values['fulltext_summary_chars'], array('min' => 100, 'max' => 5000))
         . ' &nbsp; Article fetches per run: ' . $form->generate_numeric_field('fulltext_max_per_run', (int) $values['fulltext_max_per_run'], array('min' => 1, 'max' => 10)));
     $container->output_row('Full-article failure', 'Choose what happens when the linked page cannot be safely fetched or no substantial article container can be extracted.',
-        $form->generate_select_box('fulltext_fallback', array('feed' => 'Use the original feed content', 'skip' => 'Mark this entry seen; do not publish', 'retry' => 'Fail discovery and retry later'), $values['fulltext_fallback']));
+        $form->generate_select_box('fulltext_fallback', array('feed' => 'Use the original feed content', 'skip' => 'Mark this entry seen; do not publish', 'retry_skip' => 'Retry a few times, then mark seen', 'retry' => 'Fail discovery and retry later'), $values['fulltext_fallback']));
     if (!empty($values['id'])) {
         $container->output_row('Eligibility rule changes', 'Changing eligibility requires explicit re-evaluation. This removes only prior filter-rejection history so currently visible entries can be evaluated again.',
             $form->generate_check_box('reset_filter_history', 1, 'Confirm filter change and re-evaluate previously filtered entries.'));
     }
+    $container->end();
+
+    $container = new FormContainer('Post output and cleanup');
     $container->output_row('Source attribution <em>*</em>', 'Optionally append a source link to every imported thread. New feeds default to none.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
     $container->output_row('Post header', 'Optional MyCode placed before the imported body. Allowed placeholders: {title}, {source_url}, {feed_name}, {author}, {published_date}.', $form->generate_text_area('post_header', $values['post_header']));
     $container->output_row('Post footer', 'Optional MyCode placed after the imported body but before the separate source-attribution line. The same safe placeholders are available.', $form->generate_text_area('post_footer', $values['post_footer']));
     $container->output_row('Body length', '0 keeps the complete cleaned body. A positive value creates a word-safe plain-text excerpt at that character limit.', $form->generate_numeric_field('body_length_limit', (int) $values['body_length_limit'], array('min' => 0, 'max' => 100000)));
     $container->output_row('Truncated-post link', 'When an excerpt is shortened, optionally add a link back to the original entry.', $form->generate_select_box('continuation_mode', array('none' => 'Do not add a continuation link', 'source_link' => 'Add a source link'), $values['continuation_mode'])
         . ' &nbsp; Link text: ' . $form->generate_text_box('continuation_text', $values['continuation_text'], array('maxlength' => 100)));
+    $container->output_row('Common cleanup', 'Remove recognized author/byline blocks and trailing source/read-more backlink blocks before conversion.', $form->generate_check_box('remove_bylines', 1, 'Remove common author and byline blocks', array('checked' => !empty($values['remove_bylines']))) . '<br>' . $form->generate_check_box('remove_source_links', 1, 'Remove common source and read-more backlink blocks', array('checked' => !empty($values['remove_source_links']))));
+    $container->output_row('Cleanup selectors', 'Optional simple CSS selectors, one per line: tag, .class, #id, tag.class, [attribute], or tag[attribute].', $form->generate_text_area('strip_selectors', $values['strip_selectors']));
+    $container->output_row('Cleanup regular expressions', 'Optional PHP-compatible regular expressions, one per line. Matching text is removed; rules are validated before saving.', $form->generate_text_area('strip_regexes', $values['strip_regexes']));
+    $container->end();
+
+    $container = new FormContainer('Scheduling and publishing');
     $container->output_row('Initial import policy <em>*</em>', 'Controls the first successful scan only. All available queues the full feed; most recent only queues exactly one newest entry; recent count queues the number below; start now records current entries as seen without publishing them.', $form->generate_select_box('initial_policy', array('all' => 'All available entries', 'latest' => 'Most recent only (1 entry)', 'recent' => 'Recent count (use the count below)', 'start_now' => 'Start now (skip current backlog)'), $values['initial_policy']));
     $container->output_row('Initial recent count', 'Used only by the Recent count policy (1 to 100).', $form->generate_numeric_field('initial_limit', (int) $values['initial_limit'], array('min' => 1, 'max' => 100)));
     if (!empty($values['initialized_at'])) {
@@ -629,9 +651,8 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
     $container->output_row('Publication interval <em>*</em>', 'Minimum minutes between publishing batches for this feed.', $form->generate_numeric_field('publish_interval_minutes', (int) $values['publish_interval_minutes'], array('min' => 5, 'max' => 10080)));
     $container->output_row('Maximum posts per run <em>*</em>', 'Maximum queued entries released for this feed in one task run (1 to 25). Use 1 for gradual posting.', $form->generate_numeric_field('max_posts_per_run', (int) $values['max_posts_per_run'], array('min' => 1, 'max' => 25)));
     $container->output_row('Queue order <em>*</em>', 'Choose which queued entry is published first.', $form->generate_select_box('queue_order', array('oldest' => 'Oldest first', 'newest' => 'Newest first'), $values['queue_order']));
-    $container->output_row('Common cleanup', 'Remove recognized author/byline blocks and trailing source/read-more backlink blocks before conversion.', $form->generate_check_box('remove_bylines', 1, 'Remove common author and byline blocks', array('checked' => !empty($values['remove_bylines']))) . '<br>' . $form->generate_check_box('remove_source_links', 1, 'Remove common source and read-more backlink blocks', array('checked' => !empty($values['remove_source_links']))));
-    $container->output_row('Cleanup selectors', 'Optional simple CSS selectors, one per line: tag, .class, #id, tag.class, [attribute], or tag[attribute].', $form->generate_text_area('strip_selectors', $values['strip_selectors']));
-    $container->output_row('Cleanup regular expressions', 'Optional PHP-compatible regular expressions, one per line. Matching text is removed; rules are validated before saving.', $form->generate_text_area('strip_regexes', $values['strip_regexes']));
+    $container->output_row('Publication mode', 'Automatic creates threads according to the normal schedule. Require approval prepares and stores new entries without publishing until an administrator approves them in Review queue.',
+        $form->generate_select_box('publication_mode', array('automatic' => 'Publish automatically', 'approval' => 'Require administrator approval'), $values['publication_mode']));
     $container->output_row('Pause publishing', 'Keep checking this feed and adding new entries to its queue, but do not create MyBB threads until publishing is resumed.', $form->generate_check_box('publishing_paused', 1, 'Keep collecting entries, but do not publish them yet', array('checked' => !empty($values['publishing_paused']))));
     $container->output_row('Feed enabled', 'Turn this off to stop this feed completely. Feed Publisher will not check it for new entries or publish its queued entries.', $form->generate_check_box('enabled', 1, 'Enable checking and publishing for this feed', array('checked' => !empty($values['enabled']))));
     $container->end();
@@ -669,11 +690,14 @@ function feedpublisher_admin_apply_connection_defaults(&$values, $row)
     $defaults = $row['defaults'];
     $values['url'] = $row['candidate']['url'];
     $values['name'] = !empty($defaults['name']) ? $defaults['name'] : $row['title'];
-    if (!empty($defaults['media_mode']) && in_array($defaults['media_mode'], array('ignore', 'links', 'hotlink'), true)) {
+    if (!empty($defaults['media_mode']) && in_array($defaults['media_mode'], array('ignore', 'fallback_image', 'links', 'hotlink'), true)) {
         $values['media_mode'] = $defaults['media_mode'];
     }
     if (!empty($defaults['fulltext_mode']) && in_array($defaults['fulltext_mode'], array('disabled', 'summary', 'always'), true)) {
         $values['fulltext_mode'] = $defaults['fulltext_mode'];
+    }
+    if (!empty($defaults['fulltext_fallback']) && in_array($defaults['fulltext_fallback'], array('feed', 'skip', 'retry', 'retry_skip'), true)) {
+        $values['fulltext_fallback'] = $defaults['fulltext_fallback'];
     }
 }
 
@@ -714,7 +738,10 @@ function feedpublisher_admin_connection_notice($action, $values, $connection)
         $detected = $result['ok'] ? htmlspecialchars_uni($parse['format']) . '<br><small>' . htmlspecialchars_uni($parse['encoding']) . '</small>' : 'Not parsed';
         if ($result['ok']) {
             $detected .= '<br><small>Media: ' . ((int) $defaults['media_urls'] > 0 ? (int) $defaults['media_urls'] . ' URLs in ' . (int) $defaults['media_items'] . ' entries' : 'none detected') . '</small>';
-            $detected .= '<br><small>Full article: ' . ((int) $defaults['short_items'] > 0 ? 'suggested for short feed entries' : 'not needed') . '</small>';
+            $detected .= '<br><small>Full article: ' . ((int) $defaults['short_items'] > 0 ? 'suggested for short or teaser feed entries' : 'enabled if entries are short or teaser-like') . '</small>';
+            if (!empty($defaults['teaser_items'])) {
+                $detected .= '<br><small>Failure action: retry teaser entries a few times, then mark seen if the article cannot be extracted</small>';
+            }
         }
         $table->construct_cell($detected);
         $newest = $result['newest'] ? my_date('normal', $result['newest']) : 'No valid source date';
@@ -722,8 +749,9 @@ function feedpublisher_admin_connection_notice($action, $values, $connection)
         $useUrl = 'index.php?module=config/feedpublisher&amp;action=' . (!empty($values['id']) ? 'edit&amp;id=' . (int) $values['id'] : 'add')
             . '&amp;feed_url=' . rawurlencode($row['candidate']['url'])
             . '&amp;feed_name=' . rawurlencode(!empty($defaults['name']) ? $defaults['name'] : $title)
-            . '&amp;feed_media_mode=' . rawurlencode(!empty($defaults['media_mode']) ? $defaults['media_mode'] : 'ignore')
-            . '&amp;feed_fulltext_mode=' . rawurlencode(!empty($defaults['fulltext_mode']) ? $defaults['fulltext_mode'] : 'disabled');
+            . '&amp;feed_media_mode=' . rawurlencode(!empty($defaults['media_mode']) ? $defaults['media_mode'] : 'fallback_image')
+            . '&amp;feed_fulltext_mode=' . rawurlencode(!empty($defaults['fulltext_mode']) ? $defaults['fulltext_mode'] : 'summary')
+            . '&amp;feed_fulltext_fallback=' . rawurlencode(!empty($defaults['fulltext_fallback']) ? $defaults['fulltext_fallback'] : 'feed');
         $current = $result['ok'] && $values['url'] === $row['candidate']['url'];
         $table->construct_cell($result['ok'] ? ($current ? 'Applied to form' : '<a class="button" href="' . $useUrl . '">Use this feed</a>') : 'Unavailable');
         $table->construct_row();
@@ -765,6 +793,7 @@ function feedpublisher_admin_save()
         'require_entry_body' => $mybb->get_input('require_entry_body', MyBB::INPUT_INT) ? 1 : 0,
         'require_entry_media' => $mybb->get_input('require_entry_media', MyBB::INPUT_INT) ? 1 : 0,
         'media_mode' => $mybb->get_input('media_mode'),
+        'media_position' => $mybb->get_input('media_position'),
         'publication_mode' => $mybb->get_input('publication_mode'),
         'fulltext_mode' => $mybb->get_input('fulltext_mode'),
         'fulltext_fallback' => $mybb->get_input('fulltext_fallback'),
@@ -909,10 +938,11 @@ function feedpublisher_admin_save()
         || $values['maximum_source_age_days'] < 0 || $values['maximum_source_age_days'] > 3650) {
         $errors[] = 'Source age filters are outside their allowed range.';
     }
-    if (!in_array($values['media_mode'], array('ignore', 'links', 'hotlink'), true)) $errors[] = 'Select a valid feed-media handling option.';
+    if (!in_array($values['media_mode'], array('ignore', 'fallback_image', 'links', 'hotlink'), true)) $errors[] = 'Select a valid feed-media handling option.';
+    if (!in_array($values['media_position'], array('bottom', 'top'), true)) $errors[] = 'Select a valid extra-media placement option.';
     if (!in_array($values['publication_mode'], array('automatic', 'approval'), true)) $errors[] = 'Select a valid publication mode.';
     if (!in_array($values['fulltext_mode'], array('disabled', 'summary', 'always'), true)) $errors[] = 'Select a valid linked full-article mode.';
-    if (!in_array($values['fulltext_fallback'], array('feed', 'skip', 'retry'), true)) $errors[] = 'Select a valid full-article failure action.';
+    if (!in_array($values['fulltext_fallback'], array('feed', 'skip', 'retry', 'retry_skip'), true)) $errors[] = 'Select a valid full-article failure action.';
     if ($values['fulltext_summary_chars'] < 100 || $values['fulltext_summary_chars'] > 5000) $errors[] = 'Full-article summary threshold must be between 100 and 5000 characters.';
     if ($values['fulltext_max_per_run'] < 1 || $values['fulltext_max_per_run'] > 10) $errors[] = 'Full-article fetches per run must be between 1 and 10.';
     $ruleErrors = array();
@@ -1016,6 +1046,7 @@ function feedpublisher_admin_save()
         'require_entry_body' => $values['require_entry_body'],
         'require_entry_media' => $values['require_entry_media'],
         'media_mode' => $db->escape_string($values['media_mode']),
+        'media_position' => $db->escape_string($values['media_position']),
         'publication_mode' => $db->escape_string($values['publication_mode']),
         'fulltext_mode' => $db->escape_string($values['fulltext_mode']),
         'fulltext_fallback' => $db->escape_string($values['fulltext_fallback']),
@@ -1227,6 +1258,9 @@ function feedpublisher_admin_initial_preview($values)
                 . ' bytes &middot; Removed: ' . $removed . ' bytes (' . $percent . '%)</td></tr>';
             $fulltext = isset($item['_fulltext']) ? $item['_fulltext'] : array('source' => 'feed', 'status' => 'disabled', 'message' => 'Feed content used.');
             $contentSource = $fulltext['source'] === 'fulltext' ? 'Extracted linked article' : 'Original feed content';
+            if ($fulltext['source'] !== 'fulltext' && isset($fulltext['status']) && $fulltext['status'] === 'fallback') {
+                $contentSource = 'Full article unavailable; using original feed content';
+            }
             if (!empty($fulltext['extract']['text_characters'])) $contentSource .= ' (' . (int) $fulltext['extract']['text_characters'] . ' extracted text characters)';
             echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Content source</th><td style="padding:6px;border-bottom:1px solid #ddd">'
                 . htmlspecialchars_uni($contentSource . ' - ' . $fulltext['message']) . '</td></tr>';
@@ -1255,16 +1289,25 @@ function feedpublisher_admin_initial_preview($values)
     if (count($plan) > 100) {
         echo '<p>Showing the first 100 of ' . count($plan) . ' entries.</p>';
     }
-    $listUrl = 'index.php?module=config/feedpublisher';
-    $addUrl = $listUrl . '&amp;action=add';
     echo '<div class="fp-preview-actions">';
     if (!empty($values['preview_initial'])) {
-        echo '<a class="button" href="' . $listUrl . '" onclick="history.back(); return false;">&larr; Return to feed form</a>';
+        echo '<form method="post" action="index.php?module=config/feedpublisher&amp;action=save" style="display:inline;margin:0">'
+            . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($GLOBALS['mybb']->post_code) . '">';
+        foreach ($values as $field => $value) {
+            if (in_array($field, array('preview_initial', 'refresh_prefixes', 'test_connection', 'find_feeds'), true)) {
+                continue;
+            }
+            if (is_array($value)) {
+                continue;
+            }
+            echo '<input type="hidden" name="' . htmlspecialchars_uni($field) . '" value="' . htmlspecialchars_uni((string) $value) . '">';
+        }
+        echo '<input class="button" type="submit" name="save_feed" value="' . (!empty($values['id']) ? 'Save feed' : 'Add feed') . '"></form>'
+            . '<a class="button" href="index.php?module=config/feedpublisher&amp;action=' . (!empty($values['id']) ? 'edit&amp;id=' . (int) $values['id'] : 'add') . '" onclick="history.back(); return false;">&larr; Return to feed form</a>';
     } else {
-        echo '<a class="button" href="' . $listUrl . '&amp;action=edit&amp;id=' . (int) $values['id'] . '">Edit this feed</a>';
+        echo '<a class="button" href="index.php?module=config/feedpublisher&amp;action=edit&amp;id=' . (int) $values['id'] . '">Edit this feed</a>';
     }
-    echo '<a class="button" href="' . $addUrl . '">+ Add feed</a>'
-        . '<a class="button" href="' . $listUrl . '">View all feeds</a></div>';
+    echo '</div>';
     $page->output_footer();
 }
 
@@ -1277,7 +1320,8 @@ function feedpublisher_admin_media_preview($media, $mode)
         $source = isset($entry['source']) ? $entry['source'] : 'feed media';
         $type = !empty($entry['type']) ? $entry['type'] : 'type not supplied';
         $treatment = $mode === 'ignore' ? 'ignored'
-            : (($mode === 'hotlink' && $kind === 'image') ? 'MyBB image hotlink' : 'ordinary MyBB link');
+            : ($mode === 'fallback_image' ? ($kind === 'image' ? 'fallback image if body has none' : 'ignored by fallback image mode')
+            : (($mode === 'hotlink' && $kind === 'image') ? 'MyBB image hotlink' : 'ordinary MyBB link'));
         $rows[] = htmlspecialchars_uni($source . ' / ' . $kind . ' / ' . $type . ' / ' . $treatment)
             . '<br><small>' . htmlspecialchars_uni($entry['url']) . '</small>';
     }
@@ -1315,7 +1359,8 @@ function feedpublisher_admin_moderation()
             . '<strong>Prepared:</strong> ' . my_date('normal', (int) $item['discovered_at']) . '<br>'
             . '<strong>Cleanup:</strong> source ' . strlen($item['raw_content']) . ' bytes; prepared ' . strlen($item['content']) . ' bytes; removed ' . $removed . ' bytes<br>'
             . '<strong>MyBB prefix:</strong> ' . ((int) $item['thread_prefix_id'] ? 'Prefix #' . (int) $item['thread_prefix_id'] : 'None') . '<br>'
-            . '<strong>Media:</strong> ' . feedpublisher_admin_media_preview($media, $item['media_mode']) . '</p>'
+            . '<strong>Media:</strong> ' . feedpublisher_admin_media_preview($media, $item['media_mode'])
+            . '<br><strong>Media placement:</strong> ' . ((isset($item['media_position']) && $item['media_position'] === 'top') ? 'Before the body' : 'After the body') . '</p>'
             . '<form method="post" action="index.php?module=config/feedpublisher&amp;action=moderate">'
             . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '">'
             . '<input type="hidden" name="queue_id" value="' . (int) $item['queue_id'] . '">'

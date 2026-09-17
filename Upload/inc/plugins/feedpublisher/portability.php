@@ -14,7 +14,7 @@ function feedpublisher_portability_config_fields()
     return array('name','url','title_prefix','thread_date_mode','future_date_policy','schedule_jitter_minutes',
         'identity_strategy','terminal_retention_days','terminal_retention_count','dedupe_retention_days',
         'strict_reconciliation','eligibility_rules','minimum_source_age_hours','maximum_source_age_days',
-        'require_entry_body','require_entry_media','media_mode','publication_mode','enabled','interval_minutes',
+        'require_entry_body','require_entry_media','media_mode','media_position','publication_mode','enabled','interval_minutes',
         'fulltext_mode','fulltext_fallback','fulltext_summary_chars','fulltext_max_per_run',
         'publish_interval_minutes','max_posts_per_run','queue_order','publishing_paused','initial_policy',
         'initial_limit','attribution_mode','post_header','post_footer','body_length_limit','continuation_mode',
@@ -26,7 +26,8 @@ function feedpublisher_portability_url_valid($url)
     $parts = parse_url(trim((string) $url));
     if (!$parts || empty($parts['host']) || empty($parts['scheme'])) return false;
     if (!in_array(strtolower($parts['scheme']), array('http','https'), true) || isset($parts['user']) || isset($parts['pass']) || strlen($url) > 2048) return false;
-    $host = trim($parts['host'], '[]');
+    $host = strtolower(trim($parts['host'], '[]'));
+    if ($host === 'localhost' || substr($host, -6) === '.local') return false;
     return !filter_var($host, FILTER_VALIDATE_IP)
         || filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
 }
@@ -38,9 +39,10 @@ function feedpublisher_portability_settings_supported($entry)
     $errors = array_merge($errors, feedpublisher_template_errors(isset($entry['post_header']) ? $entry['post_header'] : '', isset($entry['post_footer']) ? $entry['post_footer'] : ''));
     $errors = array_merge($errors, feedpublisher_cleanup_validate_rules(isset($entry['strip_selectors']) ? $entry['strip_selectors'] : '', isset($entry['strip_regexes']) ? $entry['strip_regexes'] : ''));
     $enums = array('thread_date_mode' => array('publish','source'), 'future_date_policy' => array('hold','clamp','skip','reject'),
-        'identity_strategy' => array('guid_link','title','content','title_content'), 'media_mode' => array('ignore','links','hotlink'),
+        'identity_strategy' => array('guid_link','title','content','title_content'), 'media_mode' => array('ignore','fallback_image','links','hotlink'),
+        'media_position' => array('top','bottom'),
         'publication_mode' => array('automatic','approval'), 'queue_order' => array('oldest','newest'),
-        'fulltext_mode' => array('disabled','summary','always'), 'fulltext_fallback' => array('feed','skip','retry'),
+        'fulltext_mode' => array('disabled','summary','always'), 'fulltext_fallback' => array('feed','skip','retry','retry_skip'),
         'initial_policy' => array('all','latest','recent','start_now'), 'attribution_mode' => array('link','title_link','none'),
         'continuation_mode' => array('none','source_link'));
     foreach ($enums as $field => $allowed) if (isset($entry[$field]) && !in_array($entry[$field], $allowed, true)) $errors[] = $field;
@@ -100,9 +102,12 @@ function feedpublisher_portability_page()
     $page->add_breadcrumb_item('Import / export');
     $page->output_header('Feed Publisher import / export');
     feedpublisher_admin_tabs('tools');
-    echo '<p><a class="button" href="index.php?module=config/feedpublisher&amp;action=export_opml">Download OPML feed list</a> '
-        . '<a class="button" href="index.php?module=config/feedpublisher&amp;action=export_config">Download full configuration</a></p>'
-        . '<p>OPML contains feed names, URLs, and an enabled-state hint. The JSON configuration export also contains MyBB-specific feed settings, but never queue contents, imported-item history, errors, timestamps, credentials, cookies, or tokens.</p>'
+    echo '<table class="general" style="width:100%;margin-bottom:16px"><thead><tr><th colspan="2">Export</th></tr></thead><tbody>'
+        . '<tr><td style="width:260px"><a class="button" href="index.php?module=config/feedpublisher&amp;action=export_opml">Download OPML feed list</a></td>'
+        . '<td><strong>Portable feed list</strong><br><small>Feed names, URLs, and an enabled-state hint for RSS readers or other import tools.</small></td></tr>'
+        . '<tr><td><a class="button" href="index.php?module=config/feedpublisher&amp;action=export_config">Download full configuration</a></td>'
+        . '<td><strong>Feed Publisher backup</strong><br><small>JSON with MyBB-specific feed settings. Excludes queue contents, imported-item history, errors, timestamps, credentials, cookies, and tokens.</small></td></tr>'
+        . '</tbody></table>'
         . '<form method="post" enctype="multipart/form-data" action="index.php?module=config/feedpublisher&amp;action=import_preview">'
         . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($mybb->post_code) . '">'
         . '<fieldset><legend>Preview an import</legend><p>Upload OPML or a Feed Publisher JSON export (maximum 256 KiB and 500 feeds). No feed URLs are fetched during preview or import.</p>'
@@ -285,9 +290,9 @@ function feedpublisher_portability_defaults($entry, $fid, $uid, $preserveEnabled
         'title_prefix' => '', 'thread_date_mode' => 'publish', 'future_date_policy' => 'hold', 'schedule_jitter_minutes' => 0,
         'identity_strategy' => 'guid_link', 'terminal_retention_days' => 90, 'terminal_retention_count' => 1000,
         'dedupe_retention_days' => 0, 'strict_reconciliation' => 0, 'eligibility_rules' => '',
-        'minimum_source_age_hours' => 0, 'maximum_source_age_days' => 0, 'require_entry_body' => 0,
-        'require_entry_media' => 0, 'media_mode' => 'ignore', 'publication_mode' => 'automatic', 'enabled' => 0,
-        'fulltext_mode' => 'disabled', 'fulltext_fallback' => 'feed', 'fulltext_summary_chars' => 600, 'fulltext_max_per_run' => 3,
+        'minimum_source_age_hours' => 0, 'maximum_source_age_days' => 0, 'require_entry_body' => 1,
+        'require_entry_media' => 0, 'media_mode' => 'fallback_image', 'media_position' => 'top', 'publication_mode' => 'automatic', 'enabled' => 0,
+        'fulltext_mode' => 'summary', 'fulltext_fallback' => 'feed', 'fulltext_summary_chars' => 600, 'fulltext_max_per_run' => 3,
         'interval_minutes' => 60, 'publish_interval_minutes' => 60, 'max_posts_per_run' => 1, 'queue_order' => 'oldest',
         'publishing_paused' => 0, 'initial_policy' => 'latest', 'initial_limit' => 1, 'attribution_mode' => 'link',
         'post_header' => '', 'post_footer' => '', 'body_length_limit' => 0, 'continuation_mode' => 'none',
@@ -301,9 +306,10 @@ function feedpublisher_portability_defaults($entry, $fid, $uid, $preserveEnabled
     $defaults['enabled'] = $preserveEnabled && !empty($defaults['enabled']) ? 1 : 0;
     foreach (array('strict_reconciliation','require_entry_body','require_entry_media','publishing_paused','remove_bylines','remove_source_links') as $field) $defaults[$field] = !empty($defaults[$field]) ? 1 : 0;
     $enums = array('thread_date_mode' => array('publish','source'), 'future_date_policy' => array('hold','clamp','skip','reject'),
-        'identity_strategy' => array('guid_link','title','content','title_content'), 'media_mode' => array('ignore','links','hotlink'),
+        'identity_strategy' => array('guid_link','title','content','title_content'), 'media_mode' => array('ignore','fallback_image','links','hotlink'),
+        'media_position' => array('top','bottom'),
         'publication_mode' => array('automatic','approval'), 'queue_order' => array('oldest','newest'),
-        'fulltext_mode' => array('disabled','summary','always'), 'fulltext_fallback' => array('feed','skip','retry'),
+        'fulltext_mode' => array('disabled','summary','always'), 'fulltext_fallback' => array('feed','skip','retry','retry_skip'),
         'initial_policy' => array('all','latest','recent','start_now'), 'attribution_mode' => array('link','title_link','none'),
         'continuation_mode' => array('none','source_link'));
     foreach ($enums as $field => $allowed) if (!in_array($defaults[$field], $allowed, true)) $defaults[$field] = $allowed[0];
@@ -351,8 +357,9 @@ function feedpublisher_portability_apply()
         $mapping = feedpublisher_portability_resolve_mapping($row['entry'], $forums, $users, $fid, $uid, $useSaved);
         if (!$mapping['complete']) { ++$unmapped; continue; }
         $forum = $db->fetch_array($db->simple_select('forums', 'fid,type,active,linkto', 'fid=' . $mapping['fid'], array('limit' => 1)));
-        $user = $db->fetch_array($db->simple_select('users', 'uid', 'uid=' . $mapping['uid'], array('limit' => 1)));
-        $permissions = $user ? forum_permissions($mapping['fid'], $mapping['uid']) : array();
+        $user = $mapping['uid'] ? get_user((int) $mapping['uid']) : array();
+        $groupIds = $user ? feedpublisher_user_group_ids($user) : '';
+        $permissions = $user ? forum_permissions($mapping['fid'], $mapping['uid'], $groupIds) : array();
         if (!$forum || $forum['type'] !== 'f' || empty($forum['active']) || !empty($forum['linkto']) || !$user
             || empty($permissions['canview']) || empty($permissions['canpostthreads'])) { ++$unmapped; continue; }
         $record = feedpublisher_portability_defaults($row['entry'], $mapping['fid'], $mapping['uid'], $mybb->get_input('preserve_enabled', MyBB::INPUT_INT));

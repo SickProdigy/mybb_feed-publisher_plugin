@@ -174,6 +174,19 @@ function feedpublisher_fetch($url, $maxBytes = 2097152, &$metadata = null)
     return $body;
 }
 
+function feedpublisher_fetch_user_agent()
+{
+    return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0';
+}
+
+function feedpublisher_fetch_headers($accept)
+{
+    return array(
+        'Accept: ' . $accept,
+        'Accept-Language: en-US,en;q=0.9',
+    );
+}
+
 function feedpublisher_fetch_resource($url, $maxBytes, $accept, &$metadata = null)
 {
     if (!function_exists('curl_init')) {
@@ -198,8 +211,10 @@ function feedpublisher_fetch_resource($url, $maxBytes, $accept, &$metadata = nul
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_RESOLVE => array($parts['host'] . ':' . $port . ':' . $pinned),
-        CURLOPT_USERAGENT => 'MyBB Feed Publisher/0.1',
-        CURLOPT_HTTPHEADER => array('Accept: ' . $accept),
+        CURLOPT_PROXY => '',
+        CURLOPT_NOPROXY => '*',
+        CURLOPT_USERAGENT => feedpublisher_fetch_user_agent(),
+        CURLOPT_HTTPHEADER => feedpublisher_fetch_headers($accept),
         CURLOPT_WRITEFUNCTION => function ($handle, $chunk) use (&$body, &$tooLarge, $maxBytes) {
             if (strlen($body) + strlen($chunk) > $maxBytes) {
                 $tooLarge = true;
@@ -304,15 +319,32 @@ function feedpublisher_test_feed_connection($url)
     }
 }
 
+function feedpublisher_feed_content_looks_partial($html, $summaryThreshold = 600)
+{
+    $plain = trim(preg_replace('/\s+/u', ' ', strip_tags((string) $html)));
+    if (my_strlen($plain) < $summaryThreshold) {
+        return true;
+    }
+    return feedpublisher_feed_content_has_teaser_link($html);
+}
+
+function feedpublisher_feed_content_has_teaser_link($html)
+{
+    $plain = trim(preg_replace('/\s+/u', ' ', strip_tags((string) $html)));
+    return preg_match('/\b(?:read|view)\s+(?:the\s+)?full\s+(?:article|story|post)\b|\bcontinue\s+reading\b|\bread\s+more\b/i', $plain) === 1;
+}
+
 function feedpublisher_suggest_feed_defaults($parseMetadata, $items, $summaryThreshold = 600)
 {
     $defaults = array(
         'name' => isset($parseMetadata['title']) ? my_substr(trim((string) $parseMetadata['title']), 0, 150) : '',
-        'media_mode' => 'ignore',
-        'fulltext_mode' => 'disabled',
+        'media_mode' => 'fallback_image',
+        'fulltext_mode' => 'summary',
+        'fulltext_fallback' => 'feed',
         'media_items' => 0,
         'media_urls' => 0,
         'short_items' => 0,
+        'teaser_items' => 0,
     );
 
     foreach ($items as $item) {
@@ -322,17 +354,23 @@ function feedpublisher_suggest_feed_defaults($parseMetadata, $items, $summaryThr
             $defaults['media_urls'] += count($media);
         }
 
-        $plain = trim(preg_replace('/\s+/u', ' ', strip_tags((string) (isset($item['content']) ? $item['content'] : ''))));
-        if (!empty($item['url']) && my_strlen($plain) < $summaryThreshold) {
+        $content = (string) (isset($item['content']) ? $item['content'] : '');
+        if (!empty($item['url']) && feedpublisher_feed_content_looks_partial($content, $summaryThreshold)) {
             ++$defaults['short_items'];
+        }
+        if (!empty($item['url']) && feedpublisher_feed_content_has_teaser_link($content)) {
+            ++$defaults['teaser_items'];
         }
     }
 
     if ($defaults['media_items'] > 0) {
-        $defaults['media_mode'] = 'ignore';
+        $defaults['media_mode'] = 'fallback_image';
     }
     if ($defaults['short_items'] > 0) {
         $defaults['fulltext_mode'] = 'summary';
+    }
+    if ($defaults['teaser_items'] > 0) {
+        $defaults['fulltext_fallback'] = 'retry_skip';
     }
 
     return $defaults;
@@ -770,11 +808,13 @@ function feedpublisher_eligibility_rules($rules, &$errors = array())
 function feedpublisher_entry_eligibility($feed, $item, $now = null)
 {
     $now = $now === null ? TIME_NOW : (int) $now;
-    if (!empty($feed['require_entry_body']) && trim(strip_tags((string) $item['content'])) === '') {
-        return array('eligible' => false, 'reason' => 'Required body text is missing.');
+    $bodyTextPresent = trim(strip_tags((string) $item['content'])) !== '';
+    $mediaPresent = !empty($item['has_media']) || (!empty($item['media']) && is_array($item['media']));
+    if (!empty($feed['require_entry_body']) && !$bodyTextPresent) {
+        return array('eligible' => false, 'reason' => 'Required body text is missing; media present: ' . ($mediaPresent ? 'yes' : 'no') . '.');
     }
-    if (!empty($feed['require_entry_media']) && empty($item['has_media'])) {
-        return array('eligible' => false, 'reason' => 'Required image or media item is missing.');
+    if (!empty($feed['require_entry_media']) && !$mediaPresent) {
+        return array('eligible' => false, 'reason' => 'Required image or media item is missing; body text present: ' . ($bodyTextPresent ? 'yes' : 'no') . '.');
     }
     $published = isset($item['published']) ? (int) $item['published'] : 0;
     $minimumHours = isset($feed['minimum_source_age_hours']) ? (int) $feed['minimum_source_age_hours'] : 0;
@@ -981,6 +1021,7 @@ function feedpublisher_html_to_mycode($html)
     }
 
     $output = html_entity_decode($output, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $output = str_replace(array("\x1Afeedpublisher-lb\x1A", "\x1Afeedpublisher-rb\x1A"), array('&#91;', '&#93;'), $output);
     $output = preg_replace("/[ \t]+\n/", "\n", $output);
     $output = preg_replace("/\n{3,}/", "\n\n", $output);
     return trim($output);
@@ -989,7 +1030,7 @@ function feedpublisher_html_to_mycode($html)
 function feedpublisher_node_to_mycode(DOMNode $node)
 {
     if ($node->nodeType === XML_TEXT_NODE) {
-        return $node->nodeValue;
+        return str_replace(array('[', ']'), array("\x1Afeedpublisher-lb\x1A", "\x1Afeedpublisher-rb\x1A"), $node->nodeValue);
     }
     if ($node->nodeType !== XML_ELEMENT_NODE) {
         return '';
@@ -1014,10 +1055,15 @@ function feedpublisher_node_to_mycode(DOMNode $node)
 
     if ($tag === 'a') {
         $url = trim($node->getAttribute('href'));
-        return feedpublisher_safe_content_url($url) ? '[url=' . $url . ']' . $content . '[/url]' : $content;
+        $url = str_replace(array('[', ']'), array('%5B', '%5D'), $url);
+        if (!feedpublisher_safe_content_url($url)) {
+            return $content;
+        }
+        return feedpublisher_youtube_video_url($url) ? '[video=youtube]' . $url . '[/video]' : '[url=' . $url . ']' . $content . '[/url]';
     }
     if ($tag === 'img') {
         $url = trim($node->getAttribute('src'));
+        $url = str_replace(array('[', ']'), array('%5B', '%5D'), $url);
         return feedpublisher_safe_content_url($url) ? '[img]' . $url . '[/img]' : '';
     }
 
@@ -1026,8 +1072,18 @@ function feedpublisher_node_to_mycode(DOMNode $node)
 
 function feedpublisher_safe_content_url($url)
 {
-    $parts = parse_url($url);
-    return $parts && isset($parts['scheme']) && in_array(strtolower($parts['scheme']), array('http', 'https'), true);
+    $parts = parse_url(trim((string) $url));
+    if (!$parts || empty($parts['scheme']) || empty($parts['host'])
+        || !in_array(strtolower($parts['scheme']), array('http', 'https'), true)
+        || isset($parts['user']) || isset($parts['pass']) || strlen((string) $url) > 2048) {
+        return false;
+    }
+    $host = strtolower(trim($parts['host'], '[]'));
+    if ($host === 'localhost' || substr($host, -6) === '.local') {
+        return false;
+    }
+    return !filter_var($host, FILTER_VALIDATE_IP)
+        || filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
 }
 
 function feedpublisher_safe_media_url($url)
@@ -1035,8 +1091,56 @@ function feedpublisher_safe_media_url($url)
     $parts = parse_url(trim((string) $url));
     if (!$parts || empty($parts['scheme']) || empty($parts['host'])
         || !in_array(strtolower($parts['scheme']), array('http', 'https'), true)
-        || isset($parts['user']) || isset($parts['pass'])) return false;
-    $host = trim($parts['host'], '[]');
+        || isset($parts['user']) || isset($parts['pass']) || strlen((string) $url) > 2048) return false;
+    $host = strtolower(trim($parts['host'], '[]'));
+    if ($host === 'localhost' || substr($host, -6) === '.local') {
+        return false;
+    }
     return !filter_var($host, FILTER_VALIDATE_IP)
         || filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+}
+
+function feedpublisher_youtube_video_url($url)
+{
+    $parts = parse_url(trim((string) $url));
+    if (!$parts || empty($parts['scheme']) || empty($parts['host'])
+        || !in_array(strtolower($parts['scheme']), array('http', 'https'), true)) {
+        return false;
+    }
+    $host = strtolower(trim($parts['host'], '[]'));
+    if (strpos($host, 'www.') === 0) {
+        $host = substr($host, 4);
+    }
+    if (strpos($host, 'm.') === 0) {
+        $host = substr($host, 2);
+    }
+    $path = isset($parts['path']) ? trim($parts['path'], '/') : '';
+    if ($host === 'youtu.be') {
+        return $path !== '';
+    }
+    if ($host === 'youtube.com') {
+        if ($path === 'watch') {
+            parse_str(isset($parts['query']) ? $parts['query'] : '', $query);
+            return !empty($query['v']);
+        }
+        return preg_match('#^(?:shorts|embed|live)/[^/]+#', $path) === 1;
+    }
+    if ($host === 'youtube-nocookie.com') {
+        return preg_match('#^embed/[^/]+#', $path) === 1;
+    }
+    return false;
+}
+
+function feedpublisher_user_group_ids($user)
+{
+    $groups = array((int) $user['usergroup']);
+    if (!empty($user['additionalgroups'])) {
+        foreach (explode(',', $user['additionalgroups']) as $gid) {
+            $gid = (int) trim($gid);
+            if ($gid > 0) {
+                $groups[] = $gid;
+            }
+        }
+    }
+    return implode(',', array_unique($groups));
 }
