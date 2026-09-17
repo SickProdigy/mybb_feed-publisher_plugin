@@ -459,6 +459,31 @@ $suite->test('full-text planning applies fallback and defers beyond the request 
     });
 });
 
+$suite->test('full-text URL rewriting is bounded, validated, and preserves the original identity', function ($t) {
+    $feed = array('identity_strategy' => 'guid_link',
+        'fulltext_url_regex' => '~^https://editors\\.example\\.com/~i',
+        'fulltext_url_replacement' => 'https://www.example.com/');
+    $original = 'https://editors.example.com/call-of-duty/article-338208/';
+    $identity = feedpublisher_derive_item_identity($feed, array('url' => $original, 'title' => 'Article', 'content' => 'Teaser'));
+    $metadata = array();
+    $rewritten = feedpublisher_fulltext_rewrite_url($feed, $original, $metadata);
+    $t->assertSame('https://www.example.com/call-of-duty/article-338208/', $rewritten);
+    $t->assertSame(true, $metadata['rewritten']);
+    $t->assertSame($original, $metadata['original_url']);
+    $t->assertSame($identity['key'], feedpublisher_derive_item_identity($feed, array('url' => $original, 'title' => 'Article', 'content' => 'Teaser'))['key']);
+
+    $unchanged = feedpublisher_fulltext_rewrite_url($feed, 'https://example.com/article', $metadata);
+    $t->assertSame('https://example.com/article', $unchanged);
+    $t->assertSame(false, $metadata['rewritten']);
+    $t->assertTrue(count(feedpublisher_fulltext_url_rewrite_errors('~example~', '')) === 1);
+    $t->assertTrue(count(feedpublisher_fulltext_url_rewrite_errors('~[~', 'https://example.com/')) === 1);
+    $unsafe = $feed;
+    $unsafe['fulltext_url_replacement'] = 'http://127.0.0.1/';
+    $t->expectException('FeedPublisherException', function () use ($unsafe, $original) {
+        feedpublisher_fulltext_rewrite_url($unsafe, $original);
+    });
+});
+
 $suite->test('full-text extraction selects article content and resolves safe relative links', function ($t) {
     if (!extension_loaded('dom')) { $t->skip('PHP DOM is not installed.'); }
     $html = '<html><body><header>Navigation</header><article class="post-content"><h1>Story</h1>'
@@ -663,8 +688,9 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $source = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher.php');
     $adminSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/admin.php');
     $publisherSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php');
+    $queueSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
-    $t->assertContains("'version' => '1.0.2'", $source);
+    $t->assertContains("'version' => '1.0.3'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
@@ -688,6 +714,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("Automatic retry scheduled", $adminSource);
     $t->assertContains("\$values['initial_policy'] !== 'recent'", $adminSource);
     $t->assertContains("feedpublisher_prepare_publication_request_context", $publisherSource);
+    $t->assertContains("!empty(\$item['source_url']) ? \$item['source_url'] : \$item['url']", $queueSource);
     $t->assertContains("\$_SERVER['REMOTE_ADDR'] = '127.0.0.1'", $publisherSource);
     $t->assertContains("'url' => 'f.url'", $adminSource);
     $t->assertContains("'forum' => 'fo.name'", $adminSource);

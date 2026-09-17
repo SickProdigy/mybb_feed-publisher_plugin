@@ -484,6 +484,8 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         'publication_mode' => 'automatic',
         'fulltext_mode' => 'summary',
         'fulltext_fallback' => 'feed',
+        'fulltext_url_regex' => '',
+        'fulltext_url_replacement' => '',
         'fulltext_summary_chars' => 600,
         'fulltext_max_per_run' => 3,
         'enabled' => 1,
@@ -620,6 +622,10 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         $form->generate_select_box('media_position', array('top' => 'Before the body (default)', 'bottom' => 'After the body'), $values['media_position']));
     $container->output_row('Linked full article', 'Disabled keeps feed content. Summary mode visits the linked page when the feed body is shorter than the threshold or looks like a read-more teaser. Always attempts the linked page for every new publishable entry. Requests use the same public-address, DNS pinning, TLS, redirect, timeout, MIME, and 2 MiB limits as feed fetching.',
         $form->generate_select_box('fulltext_mode', array('disabled' => 'Disabled (use feed content)', 'summary' => 'Retrieve when feed content is short or a teaser', 'always' => 'Always retrieve linked article'), $values['fulltext_mode']));
+    $container->output_row('Full-article URL match regex', 'Optional per-feed PHP-compatible regex used only before retrieving a linked article. Both URL rewrite fields are required when enabled. Example: ~^https://editors\\.charlieintel\\.com/~i',
+        $form->generate_text_box('fulltext_url_regex', $values['fulltext_url_regex'], array('maxlength' => 255)));
+    $container->output_row('Full-article URL replacement', 'Replacement for the first match. Capture references such as $1 are supported. The result must be a safe public HTTP or HTTPS URL. Example: https://www.charlieintel.com/',
+        $form->generate_text_box('fulltext_url_replacement', $values['fulltext_url_replacement'], array('maxlength' => 2048)));
     $container->output_row('Full-article limits', 'Threshold counts plain feed-text characters. At most 1 to 10 new article pages are fetched per discovery run; remaining entries wait for a later run.',
         'Summary threshold: ' . $form->generate_numeric_field('fulltext_summary_chars', (int) $values['fulltext_summary_chars'], array('min' => 100, 'max' => 5000))
         . ' &nbsp; Article fetches per run: ' . $form->generate_numeric_field('fulltext_max_per_run', (int) $values['fulltext_max_per_run'], array('min' => 1, 'max' => 10)));
@@ -800,6 +806,8 @@ function feedpublisher_admin_save()
         'publication_mode' => $mybb->get_input('publication_mode'),
         'fulltext_mode' => $mybb->get_input('fulltext_mode'),
         'fulltext_fallback' => $mybb->get_input('fulltext_fallback'),
+        'fulltext_url_regex' => trim($mybb->get_input('fulltext_url_regex')),
+        'fulltext_url_replacement' => trim($mybb->get_input('fulltext_url_replacement')),
         'fulltext_summary_chars' => $mybb->get_input('fulltext_summary_chars', MyBB::INPUT_INT),
         'fulltext_max_per_run' => $mybb->get_input('fulltext_max_per_run', MyBB::INPUT_INT),
         'reset_filter_history' => $mybb->get_input('reset_filter_history', MyBB::INPUT_INT) ? 1 : 0,
@@ -950,6 +958,7 @@ function feedpublisher_admin_save()
     if (!in_array($values['publication_mode'], array('automatic', 'approval'), true)) $errors[] = 'Select a valid publication mode.';
     if (!in_array($values['fulltext_mode'], array('disabled', 'summary', 'always'), true)) $errors[] = 'Select a valid linked full-article mode.';
     if (!in_array($values['fulltext_fallback'], array('feed', 'skip', 'retry', 'retry_skip'), true)) $errors[] = 'Select a valid full-article failure action.';
+    $errors = array_merge($errors, feedpublisher_fulltext_url_rewrite_errors($values['fulltext_url_regex'], $values['fulltext_url_replacement']));
     if ($values['fulltext_summary_chars'] < 100 || $values['fulltext_summary_chars'] > 5000) $errors[] = 'Full-article summary threshold must be between 100 and 5000 characters.';
     if ($values['fulltext_max_per_run'] < 1 || $values['fulltext_max_per_run'] > 10) $errors[] = 'Full-article fetches per run must be between 1 and 10.';
     $ruleErrors = array();
@@ -1058,6 +1067,8 @@ function feedpublisher_admin_save()
         'publication_mode' => $db->escape_string($values['publication_mode']),
         'fulltext_mode' => $db->escape_string($values['fulltext_mode']),
         'fulltext_fallback' => $db->escape_string($values['fulltext_fallback']),
+        'fulltext_url_regex' => $db->escape_string($values['fulltext_url_regex']),
+        'fulltext_url_replacement' => $db->escape_string($values['fulltext_url_replacement']),
         'fulltext_summary_chars' => $values['fulltext_summary_chars'],
         'fulltext_max_per_run' => $values['fulltext_max_per_run'],
         'enabled' => $values['enabled'],
@@ -1250,7 +1261,7 @@ function feedpublisher_admin_initial_preview($values)
             $prepared = feedpublisher_prepare_item($values, $item);
             $removed = max(0, $prepared['raw_bytes'] - $prepared['cleaned_bytes']);
             $percent = $prepared['raw_bytes'] > 0 ? round(($removed / $prepared['raw_bytes']) * 100, 1) : 0;
-            $previewItem = array('source_url' => $item['url'], 'title' => $item['title'], 'content' => $prepared['content'], 'author' => isset($item['author']) ? $item['author'] : '', 'source_published' => isset($item['published']) ? $item['published'] : 0, 'media' => isset($item['media']) ? $item['media'] : array());
+            $previewItem = array('source_url' => !empty($item['source_url']) ? $item['source_url'] : $item['url'], 'title' => $item['title'], 'content' => $prepared['content'], 'author' => isset($item['author']) ? $item['author'] : '', 'source_published' => isset($item['published']) ? $item['published'] : 0, 'media' => isset($item['media']) ? $item['media'] : array());
             $composed = feedpublisher_compose_post($values, $previewItem);
             $exampleTitle = $composed['title'];
             $previewUser = !empty($values['uid']) ? get_user((int) $values['uid']) : array();
@@ -1272,6 +1283,11 @@ function feedpublisher_admin_initial_preview($values)
             if (!empty($fulltext['extract']['text_characters'])) $contentSource .= ' (' . (int) $fulltext['extract']['text_characters'] . ' extracted text characters)';
             echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Content source</th><td style="padding:6px;border-bottom:1px solid #ddd">'
                 . htmlspecialchars_uni($contentSource . ' - ' . $fulltext['message']) . '</td></tr>';
+            if (!empty($fulltext['url']['rewritten'])) {
+                echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Article URL rewrite</th><td style="padding:6px;border-bottom:1px solid #ddd">Original: '
+                    . htmlspecialchars_uni($fulltext['url']['original_url']) . '<br>Fetched: '
+                    . htmlspecialchars_uni($fulltext['url']['fetch_url']) . '</td></tr>';
+            }
             echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">MyBB thread prefix</th><td style="padding:6px;border-bottom:1px solid #ddd">'
                 . htmlspecialchars_uni($nativePrefixLabel) . '</td></tr>';
             echo '<tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd">Feed media</th><td style="padding:6px;border-bottom:1px solid #ddd">'

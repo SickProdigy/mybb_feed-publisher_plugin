@@ -4,7 +4,7 @@ Feed Publisher imports RSS, RDF, and Atom entries as MyBB threads. It uses
 MyBB's post data handler, converts remote HTML to safe MyCode, and does not
 require raw HTML to be enabled in posts.
 
-> **Status:** Stable release (`1.0.2`). Test upgrades and feed behavior on a
+> **Status:** Stable release (`1.0.3`). Test upgrades and feed behavior on a
 > non-production MyBB installation before deployment.
 
 ## Highlights
@@ -192,6 +192,15 @@ new entry. Explicit read-more/full-article teaser feeds discovered by Test
 connection default to retrying extraction a few times, then skipping the entry
 when the linked article still cannot be extracted.
 
+Feeds whose entry links use a stale article host can optionally rewrite the URL
+before full-article retrieval. Supply both a PHP-compatible match regex and a
+replacement; only the first match is replaced. For example,
+`~^https://editors\.charlieintel\.com/~i` with
+`https://www.charlieintel.com/` keeps the original feed URL for duplicate
+identity while fetching and attributing a successfully extracted article to
+the rewritten URL. Rewritten URLs must still pass the normal public HTTP(S),
+DNS, and private-address checks. Feed Publisher never guesses alternate hosts.
+
 Article extraction:
 
 - Reuses DNS pinning, private-address blocking, TLS verification, and the
@@ -205,6 +214,11 @@ Article extraction:
 Failure can retain the feed content, mark the entry seen, retry a few times and
 then mark seen, or fail discovery for retry. A configurable limit of 1-10 article
 requests per run defers overflow without losing entries.
+
+Maintainers can audit every unique endpoint in the local recommendation list
+with `php tests/audit_feeds.php`. Add `--fulltext` to attempt one linked article
+per feed, or `--limit=N` to change the number of rendered entries inspected.
+This is an opt-in live network check; it is not part of `tests/run.php`.
 
 ## Thread Dates
 

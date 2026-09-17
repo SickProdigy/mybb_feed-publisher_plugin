@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3 - 2026-09-17
+
+- Added optional per-feed full-article URL regex rewriting for stale article hosts, with validation, SSRF protections, diagnostics, and configuration portability.
+- Added an opt-in live feed audit utility for checking parsing, rendered output, full-article extraction, suspicious page furniture, and unusually thin or large posts.
+
 ## 1.0.2 - 2026-09-16
 
 - Prefer strongly identified article-body containers over broad page wrappers

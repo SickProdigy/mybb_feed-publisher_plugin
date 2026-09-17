@@ -18,6 +18,51 @@ function feedpublisher_fulltext_fetch($url, &$metadata = null)
     return feedpublisher_fulltext_normalize_encoding($html, isset($metadata['http_charset']) ? $metadata['http_charset'] : '');
 }
 
+function feedpublisher_fulltext_url_rewrite_errors($regex, $replacement)
+{
+    $regex = trim((string) $regex);
+    $replacement = trim((string) $replacement);
+    $errors = array();
+    if (($regex === '') !== ($replacement === '')) {
+        $errors[] = 'Full-article URL rewriting requires both a match regex and replacement.';
+        return $errors;
+    }
+    if ($regex === '') return $errors;
+    if (strlen($regex) > 255 || preg_match('/[\r\n\x00]/', $regex)) {
+        $errors[] = 'Full-article URL match regex must be one line and no longer than 255 bytes.';
+    } else {
+        set_error_handler(function () { return true; });
+        $valid = preg_match($regex, '') !== false;
+        restore_error_handler();
+        if (!$valid) $errors[] = 'Full-article URL match regex must be a valid PHP-compatible regular expression.';
+    }
+    if (strlen($replacement) > 2048 || preg_match('/[\r\n\x00]/', $replacement)) {
+        $errors[] = 'Full-article URL replacement must be one line and no longer than 2048 bytes.';
+    }
+    return $errors;
+}
+
+function feedpublisher_fulltext_rewrite_url($feed, $url, &$metadata = null)
+{
+    $original = trim((string) $url);
+    $regex = isset($feed['fulltext_url_regex']) ? trim((string) $feed['fulltext_url_regex']) : '';
+    $replacement = isset($feed['fulltext_url_replacement']) ? trim((string) $feed['fulltext_url_replacement']) : '';
+    $metadata = array('original_url' => $original, 'fetch_url' => $original, 'rewritten' => false);
+    $errors = feedpublisher_fulltext_url_rewrite_errors($regex, $replacement);
+    if ($errors) throw new FeedPublisherException('fulltext', $errors[0]);
+    if ($regex === '') return $original;
+    $count = 0;
+    $rewritten = preg_replace($regex, $replacement, $original, 1, $count);
+    if (!is_string($rewritten)) throw new FeedPublisherException('fulltext', 'Full-article URL rewriting failed.');
+    if ($count === 0) return $original;
+    if (!feedpublisher_safe_content_url($rewritten)) {
+        throw new FeedPublisherException('fulltext', 'The rewritten full-article URL is not a safe public HTTP or HTTPS URL.');
+    }
+    $metadata['fetch_url'] = $rewritten;
+    $metadata['rewritten'] = $rewritten !== $original;
+    return $rewritten;
+}
+
 function feedpublisher_fulltext_normalize_encoding($html, $httpCharset = '')
 {
     $charset = trim((string) $httpCharset);
@@ -193,7 +238,9 @@ function feedpublisher_fulltext_item_known($feed, $item, $identity)
 function feedpublisher_fulltext_failure($feed, &$entry, $message)
 {
     $fallback = isset($feed['fulltext_fallback']) ? $feed['fulltext_fallback'] : 'feed';
+    $urlMetadata = isset($entry['item']['_fulltext']['url']) ? $entry['item']['_fulltext']['url'] : null;
     $entry['item']['_fulltext'] = array('source' => 'feed', 'status' => 'fallback', 'message' => feedpublisher_safe_log_text($message));
+    if ($urlMetadata !== null) $entry['item']['_fulltext']['url'] = $urlMetadata;
     if ($fallback === 'feed' && trim(strip_tags((string) $entry['item']['content'])) === '') {
         throw new FeedPublisherException('fulltext', $message . ' The original feed content was also empty, so no fallback post was queued.');
     } elseif ($fallback === 'skip') {
@@ -249,13 +296,17 @@ function feedpublisher_fulltext_prepare_plan($feed, $plan)
         }
         try {
             if (!feedpublisher_safe_content_url($item['url'])) throw new FeedPublisherException('fulltext', 'The entry has no safe linked article URL.');
+            $rewrite = array();
+            $fetchUrl = feedpublisher_fulltext_rewrite_url($feed, $item['url'], $rewrite);
+            $item['_fulltext'] = array('url' => $rewrite);
             $fetch = array();
-            $html = feedpublisher_fulltext_fetch($item['url'], $fetch);
+            $html = feedpublisher_fulltext_fetch($fetchUrl, $fetch);
             $extract = array();
-            $content = feedpublisher_fulltext_extract($html, $item['url'], $extract);
+            $content = feedpublisher_fulltext_extract($html, $fetchUrl, $extract);
             $item['content'] = $content;
+            if (!empty($rewrite['rewritten'])) $item['source_url'] = $fetchUrl;
             $item['_fulltext'] = array('source' => 'fulltext', 'status' => 'extracted', 'message' => 'Extracted linked article.',
-                'fetch' => $fetch, 'extract' => $extract, 'feed_characters' => $plainLength);
+                'url' => $rewrite, 'fetch' => $fetch, 'extract' => $extract, 'feed_characters' => $plainLength);
         } catch (Throwable $exception) {
             feedpublisher_fulltext_failure($feed, $entry, $exception->getMessage());
         }
