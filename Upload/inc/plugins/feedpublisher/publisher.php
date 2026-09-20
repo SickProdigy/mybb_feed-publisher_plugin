@@ -253,6 +253,23 @@ function feedpublisher_word_safe_excerpt($message, $limit, &$truncated)
     return rtrim($excerpt) . '...';
 }
 
+function feedpublisher_enforce_post_limit($message, $limit, &$truncated)
+{
+    $limit = (int) $limit;
+    if ($limit < 1 || my_strlen($message) <= $limit) return $message;
+
+    // A raw substring could leave MyCode tags open, so oversized posts fall back
+    // to a readable plain-text excerpt before they reach MyBB's data handler.
+    $plain = trim(preg_replace('/\[[^\]\r\n]{1,200}\]/', '', (string) $message));
+    $notice = "\n\n[i]This article was shortened because the original exceeded the forum post limit.[/i]";
+    $available = max(1, $limit - my_strlen($notice));
+    $excerpt = my_substr($plain, 0, $available + 1);
+    if (preg_match('/^(.{1,' . $available . '})(?:\s+\S*)$/us', $excerpt, $match)) $excerpt = $match[1];
+    else $excerpt = my_substr($excerpt, 0, $available);
+    $truncated = true;
+    return rtrim($excerpt) . $notice;
+}
+
 function feedpublisher_compose_post($feed, $item)
 {
     $body = trim((string) $item['content']);
@@ -280,7 +297,10 @@ function feedpublisher_compose_post($feed, $item)
     }
     $footer = feedpublisher_render_template(isset($feed['post_footer']) ? $feed['post_footer'] : '', $feed, $item);
     if (trim($footer) !== '') $parts[] = trim($footer);
-    $body = feedpublisher_add_source_attribution(implode("\n\n", $parts), $item, isset($feed['attribution_mode']) ? $feed['attribution_mode'] : 'link');
+    $body = implode("\n\n", $parts);
+    $body = feedpublisher_enforce_post_limit($body, 60000, $truncated);
+    $body = feedpublisher_add_source_attribution($body, $item, isset($feed['attribution_mode']) ? $feed['attribution_mode'] : 'link');
+    $body = feedpublisher_enforce_post_limit($body, 65535, $truncated);
     $title = feedpublisher_transform_title($item['title'], isset($feed['title_strip_regex']) ? $feed['title_strip_regex'] : '');
     return array('title' => feedpublisher_build_subject($title, isset($feed['title_prefix']) ? $feed['title_prefix'] : ''), 'body' => $body, 'truncated' => $truncated);
 }

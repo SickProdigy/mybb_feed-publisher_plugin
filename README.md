@@ -4,7 +4,7 @@ Feed Publisher imports RSS, RDF, and Atom entries as MyBB threads. It uses
 MyBB's post data handler, converts remote HTML to safe MyCode, and does not
 require raw HTML to be enabled in posts.
 
-> **Status:** Stable release (`1.0.3`). Test upgrades and feed behavior on a
+> **Status:** Stable release (`1.0.4`). Test upgrades and feed behavior on a
 > non-production MyBB installation before deployment.
 
 ## Highlights

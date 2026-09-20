@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.4 - 2026-09-20
+
+- Safely shorten oversized generated posts before publication so full articles
+  cannot exceed MyBB's 65,535-character message limit.
+
 ## 1.0.3 - 2026-09-17
 
 - Promote safe lazy-loaded article image URLs during full-text extraction and

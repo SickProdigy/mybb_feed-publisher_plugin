@@ -364,6 +364,19 @@ $suite->test('default post composition preserves the existing body behavior', fu
     $t->assertSame("[img]https://example.com/image.jpg[/img]\n\nBody", $top['body']);
 });
 
+$suite->test('post composition safely shortens content beyond the MyBB message limit', function ($t) {
+    $post = feedpublisher_compose_post(array('attribution_mode' => 'link'), array(
+        'title' => 'Oversized article',
+        'content' => '[b]' . str_repeat('large article content ', 22000) . '[/b]',
+        'source_url' => 'https://example.com/oversized-article',
+    ));
+    $t->assertSame(true, $post['truncated']);
+    $t->assertTrue(my_strlen($post['body']) <= 65535);
+    $t->assertContains('This article was shortened', $post['body']);
+    $t->assertContains('Source: [url=https://example.com/oversized-article]', $post['body']);
+    $t->assertNotContains('[b]', $post['body']);
+});
+
 $suite->test('media composition hotlinks only images and safely links other media', function ($t) {
     $media = array(
         array('url' => 'https://example.com/image.jpg', 'kind' => 'image'),
@@ -712,7 +725,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $publisherSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php');
     $queueSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
-    $t->assertContains("'version' => '1.0.3'", $source);
+    $t->assertContains("'version' => '1.0.4'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
