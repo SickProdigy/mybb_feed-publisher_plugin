@@ -35,7 +35,7 @@ function feedpublisher_publish_queued_item($feed, $item)
         throw new RuntimeException('The configured posting user is banned.');
     }
 
-    $post = feedpublisher_compose_post($feed, $item);
+    $post = feedpublisher_compose_post($feed, $item, feedpublisher_effective_message_limit($forum['fid'], $user['uid']));
     $subject = $post['title'];
     $message = $post['body'];
     if ($subject === '' || $message === '') {
@@ -256,21 +256,59 @@ function feedpublisher_word_safe_excerpt($message, $limit, &$truncated)
 function feedpublisher_enforce_post_limit($message, $limit, &$truncated)
 {
     $limit = (int) $limit;
-    if ($limit < 1 || my_strlen($message) <= $limit) return $message;
+    if ($limit < 1 || strlen($message) <= $limit) return $message;
 
     // A raw substring could leave MyCode tags open, so oversized posts fall back
     // to a readable plain-text excerpt before they reach MyBB's data handler.
     $plain = trim(preg_replace('/\[[^\]\r\n]{1,200}\]/', '', (string) $message));
     $notice = "\n\n[i]This article was shortened because the original exceeded the forum post limit.[/i]";
-    $available = max(1, $limit - my_strlen($notice));
-    $excerpt = my_substr($plain, 0, $available + 1);
-    if (preg_match('/^(.{1,' . $available . '})(?:\s+\S*)$/us', $excerpt, $match)) $excerpt = $match[1];
-    else $excerpt = my_substr($excerpt, 0, $available);
+    $available = max(1, $limit - strlen($notice));
+    $low = 0;
+    $high = min(my_strlen($plain), $available);
+    while ($low < $high) {
+        $middle = (int) ceil(($low + $high) / 2);
+        if (strlen(my_substr($plain, 0, $middle)) <= $available) $low = $middle;
+        else $high = $middle - 1;
+    }
+    $excerpt = my_substr($plain, 0, $low);
+    if (preg_match('/^(.*)\s+\S*$/us', $excerpt, $match) && $match[1] !== '') $excerpt = $match[1];
     $truncated = true;
     return rtrim($excerpt) . $notice;
 }
 
-function feedpublisher_compose_post($feed, $item)
+function feedpublisher_message_limit()
+{
+    global $mybb;
+
+    if (isset($mybb->settings) && array_key_exists('maxmessagelength', $mybb->settings)) {
+        return max(0, (int) $mybb->settings['maxmessagelength']);
+    }
+    return 65535;
+}
+
+function feedpublisher_effective_message_limit($fid, $uid)
+{
+    global $db;
+
+    $limit = feedpublisher_message_limit();
+    $databaseLimit = 0;
+    if (isset($db->type) && stripos($db->type, 'my') !== false && method_exists($db, 'show_fields_from')) {
+        $fields = $db->show_fields_from('posts');
+        foreach ((array) $fields as $field) {
+            if (!isset($field['Field']) || $field['Field'] !== 'message') continue;
+            $type = strtolower(isset($field['Type']) ? $field['Type'] : 'text');
+            if (strpos($type, 'longtext') === 0) $databaseLimit = 4294967295;
+            elseif (strpos($type, 'mediumtext') === 0) $databaseLimit = 16777215;
+            else $databaseLimit = 65535;
+            break;
+        }
+    }
+    if ($limit < 1) return $databaseLimit;
+    if ($databaseLimit < 1) return $limit;
+    return is_moderator((int) $fid, '', (int) $uid) ? $databaseLimit : min($limit, $databaseLimit);
+}
+
+function feedpublisher_compose_post($feed, $item, $messageLimit = null)
 {
     $body = trim((string) $item['content']);
     $truncated = false;
@@ -298,9 +336,15 @@ function feedpublisher_compose_post($feed, $item)
     $footer = feedpublisher_render_template(isset($feed['post_footer']) ? $feed['post_footer'] : '', $feed, $item);
     if (trim($footer) !== '') $parts[] = trim($footer);
     $body = implode("\n\n", $parts);
-    $body = feedpublisher_enforce_post_limit($body, 60000, $truncated);
-    $body = feedpublisher_add_source_attribution($body, $item, isset($feed['attribution_mode']) ? $feed['attribution_mode'] : 'link');
-    $body = feedpublisher_enforce_post_limit($body, 65535, $truncated);
+    $attributionMode = isset($feed['attribution_mode']) ? $feed['attribution_mode'] : 'link';
+    if ($messageLimit === null) $messageLimit = feedpublisher_message_limit();
+    if ($messageLimit > 0) {
+        $attribution = feedpublisher_add_source_attribution('', $item, $attributionMode);
+        $contentLimit = max(1, $messageLimit - strlen($attribution));
+        $body = feedpublisher_enforce_post_limit($body, $contentLimit, $truncated);
+    }
+    $body = feedpublisher_add_source_attribution($body, $item, $attributionMode);
+    if ($messageLimit > 0) $body = feedpublisher_enforce_post_limit($body, $messageLimit, $truncated);
     $title = feedpublisher_transform_title($item['title'], isset($feed['title_strip_regex']) ? $feed['title_strip_regex'] : '');
     return array('title' => feedpublisher_build_subject($title, isset($feed['title_prefix']) ? $feed['title_prefix'] : ''), 'body' => $body, 'truncated' => $truncated);
 }

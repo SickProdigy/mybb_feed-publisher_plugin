@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.5 - 2026-09-20
+
+- Honor MyBB's effective byte limit for generated posts, including the forum
+  setting, the posts table capacity, and moderator behavior.
+- Make a forced manual batch publish queued entries immediately, including
+  entries still inside their automatic retry delay.
+
 ## 1.0.4 - 2026-09-20
 
 - Safely shorten oversized generated posts before publication so full articles

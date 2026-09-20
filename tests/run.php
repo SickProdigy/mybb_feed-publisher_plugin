@@ -126,7 +126,10 @@ class FeedPublisherQueueDb
         if ($table === 'feedpublisher_queue') {
             $rows = array_values($this->queue);
             if (strpos($condition, "state='queued'") !== false) {
-                $rows = array_values(array_filter($rows, function ($row) { return $row['state'] === 'queued' && $row['available_at'] <= TIME_NOW; }));
+                $requireDue = strpos($condition, 'available_at<=') !== false;
+                $rows = array_values(array_filter($rows, function ($row) use ($requireDue) {
+                    return $row['state'] === 'queued' && (!$requireDue || $row['available_at'] <= TIME_NOW);
+                }));
             }
             if (isset($options['limit'])) { $rows = array_slice($rows, 0, (int) $options['limit']); }
             return new FeedPublisherArrayResult($rows);
@@ -365,16 +368,32 @@ $suite->test('default post composition preserves the existing body behavior', fu
 });
 
 $suite->test('post composition safely shortens content beyond the MyBB message limit', function ($t) {
+    global $mybb;
+    $originalMybb = isset($mybb) ? $mybb : null;
+    $mybb = (object) array('settings' => array('maxmessagelength' => 1200));
     $post = feedpublisher_compose_post(array('attribution_mode' => 'link'), array(
         'title' => 'Oversized article',
-        'content' => '[b]' . str_repeat('large article content ', 22000) . '[/b]',
+        'content' => '[b]' . str_repeat('large article content — ', 22000) . '[/b]',
         'source_url' => 'https://example.com/oversized-article',
     ));
+    $mybb = $originalMybb;
     $t->assertSame(true, $post['truncated']);
-    $t->assertTrue(my_strlen($post['body']) <= 65535);
+    $t->assertTrue(strlen($post['body']) <= 1200);
     $t->assertContains('This article was shortened', $post['body']);
     $t->assertContains('Source: [url=https://example.com/oversized-article]', $post['body']);
     $t->assertNotContains('[b]', $post['body']);
+});
+
+$suite->test('a zero MyBB message limit leaves generated posts unlimited', function ($t) {
+    global $mybb;
+    $originalMybb = isset($mybb) ? $mybb : null;
+    $mybb = (object) array('settings' => array('maxmessagelength' => 0));
+    $post = feedpublisher_compose_post(array('attribution_mode' => 'none'), array(
+        'title' => 'Unlimited article', 'content' => str_repeat('content ', 10000),
+    ));
+    $mybb = $originalMybb;
+    $t->assertSame(false, $post['truncated']);
+    $t->assertTrue(my_strlen($post['body']) > 65535);
 });
 
 $suite->test('media composition hotlinks only images and safely links other media', function ($t) {
@@ -630,6 +649,18 @@ $suite->test('publication failure releases reservation and requeues item', funct
     $t->assertContains('publisher failed', $db->queue[1]['last_error']);
 });
 
+$suite->test('forced manual publication bypasses a queued retry delay', function ($t) {
+    global $db;
+    $db = new FeedPublisherQueueDb;
+    $db->queue[1] = array('id' => 1, 'feed_id' => 7, 'item_key' => hash('sha256', 'manual-retry'), 'source_url' => 'https://example.com/a',
+        'state' => 'queued', 'available_at' => TIME_NOW + 300, 'attempts' => 1, 'claim_token' => '', 'source_published' => 0, 'discovered_at' => 1);
+    $feed = array('id' => 7, 'publishing_paused' => 0, 'publish_interval_minutes' => 5, 'last_published' => TIME_NOW,
+        'max_posts_per_run' => 1, 'queue_order' => 'oldest');
+    $claimed = feedpublisher_queue_claim_due($feed, true);
+    $t->assertSame(1, count($claimed));
+    $t->assertSame('processing', $db->queue[1]['state']);
+});
+
 $suite->test('moderated entries are excluded from scheduled publication', function ($t) {
     global $db;
     $db = new FeedPublisherQueueDb;
@@ -725,7 +756,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $publisherSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php');
     $queueSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
-    $t->assertContains("'version' => '1.0.4'", $source);
+    $t->assertContains("'version' => '1.0.5'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);

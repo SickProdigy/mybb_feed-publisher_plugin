@@ -179,10 +179,12 @@ function feedpublisher_queue_claim_due($feed, $force = false)
     $limit = max(1, min(25, (int) $feed['max_posts_per_run']));
     $direction = $feed['queue_order'] === 'newest' ? 'DESC' : 'ASC';
     $sortTime = 'CASE WHEN source_published=0 THEN discovered_at ELSE source_published END ' . $direction . ', id ' . $direction;
+    $where = "feed_id={$feedId} AND state='queued'";
+    if (!$force) $where .= ' AND available_at<=' . TIME_NOW;
     $query = $db->simple_select(
         'feedpublisher_queue',
         '*',
-        "feed_id={$feedId} AND state='queued' AND available_at<=" . TIME_NOW,
+        $where,
         array('order_by' => $sortTime, 'limit' => $limit)
     );
 

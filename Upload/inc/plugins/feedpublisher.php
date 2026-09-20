@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://github.com/sickprodigy/mybb_feed-publisher_plugin',
         'author' => 'SickProdigy',
         'authorsite' => 'https://www.sickgaming.net',
-        'version' => '1.0.4',
+        'version' => '1.0.5',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
