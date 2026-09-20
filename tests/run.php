@@ -531,6 +531,28 @@ $suite->test('full-text extraction removes image lightbox controls without dropp
     $t->assertNotContains('>close<', strtolower($article));
 });
 
+$suite->test('full-text extraction promotes lazy images and removes placeholders', function ($t) {
+    if (!extension_loaded('dom')) { $t->skip('PHP DOM is not installed.'); }
+    $html = '<html><body><article><h1>Story</h1>'
+        . '<p>This article starts with enough useful words to select the article body while testing lazy image normalization safely.</p>'
+        . '<figure><img src="/placeholder.svg" data-src="/media/real.jpg" alt="Real image"><figcaption>Real caption</figcaption></figure>'
+        . '<img src="/transparent.gif" data-srcset="/media/small.jpg 320w, /media/large.jpg 1280w" alt="Responsive image">'
+        . '<img src="/blank.png" data-src="http://127.0.0.1/private.jpg" alt="Unsafe image">'
+        . '<img src="/media/ordinary.jpg" alt="Ordinary image">'
+        . '<p>A second substantial paragraph ensures extraction remains deterministic and keeps the surrounding article content intact.</p>'
+        . '</article></body></html>';
+    $article = feedpublisher_fulltext_extract($html, 'https://example.com/news/story.html');
+    $t->assertContains('https://example.com/media/real.jpg', $article);
+    $t->assertContains('https://example.com/media/large.jpg', $article);
+    $t->assertContains('https://example.com/media/ordinary.jpg', $article);
+    $t->assertContains('Real caption', $article);
+    $t->assertNotContains('placeholder.svg', $article);
+    $t->assertNotContains('transparent.gif', $article);
+    $t->assertNotContains('blank.png', $article);
+    $t->assertNotContains('127.0.0.1', $article);
+    $t->assertNotContains('data-src', $article);
+});
+
 $suite->test('full-text extraction removes common article chrome while preserving real links', function ($t) {
     if (!extension_loaded('dom')) { $t->skip('PHP DOM is not installed.'); }
     $html = '<html><body><main><article><h1>Story</h1>'

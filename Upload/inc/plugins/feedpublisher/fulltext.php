@@ -126,6 +126,7 @@ function feedpublisher_fulltext_extract($html, $url, &$metadata = null)
         $declared = feedpublisher_resolve_relative_content_url($baseNodes->item(0)->getAttribute('href'), $url);
         if ($declared !== '') $base = $declared;
     }
+    feedpublisher_fulltext_normalize_lazy_images($xpath, $best, $base);
     foreach ($xpath->query('.//*[@href]|.//*[@src]', $best) as $node) {
         foreach (array('href','src') as $attribute) {
             if (!$node->hasAttribute($attribute)) continue;
@@ -139,6 +140,57 @@ function feedpublisher_fulltext_extract($html, $url, &$metadata = null)
     if (trim($output) === '' || $plainLength < 200) throw new FeedPublisherException('fulltext', 'Article extraction returned insufficient content.');
     $metadata = array('selector' => strtolower($best->nodeName), 'text_characters' => $plainLength, 'html_bytes' => strlen($output));
     return $output;
+}
+
+function feedpublisher_fulltext_normalize_lazy_images(DOMXPath $xpath, DOMElement $article, $base)
+{
+    $images = $xpath->query('.//img', $article);
+    if (!$images) return;
+    foreach ($images as $image) {
+        if (!$image instanceof DOMElement) continue;
+        $replacement = '';
+        foreach (array('data-src', 'data-lazy-src', 'data-original', 'data-original-src') as $attribute) {
+            if (!$image->hasAttribute($attribute)) continue;
+            $replacement = feedpublisher_resolve_relative_content_url($image->getAttribute($attribute), $base);
+            if ($replacement !== '') break;
+        }
+        if ($replacement === '') {
+            foreach (array('data-srcset', 'data-lazy-srcset') as $attribute) {
+                if (!$image->hasAttribute($attribute)) continue;
+                $replacement = feedpublisher_fulltext_srcset_url($image->getAttribute($attribute), $base);
+                if ($replacement !== '') break;
+            }
+        }
+        if ($replacement !== '') {
+            $image->setAttribute('src', $replacement);
+        } elseif (feedpublisher_fulltext_placeholder_image($image->getAttribute('src'))) {
+            $image->removeAttribute('src');
+        }
+        foreach (array('data-src', 'data-lazy-src', 'data-original', 'data-original-src', 'data-srcset', 'data-lazy-srcset') as $attribute) {
+            $image->removeAttribute($attribute);
+        }
+    }
+}
+
+function feedpublisher_fulltext_srcset_url($srcset, $base)
+{
+    $best = ''; $bestScore = -1; $position = 0;
+    foreach (preg_split('/\s*,\s*/', trim((string) $srcset)) as $candidate) {
+        if (!preg_match('/^(\S+)(?:\s+([0-9]+(?:\.[0-9]+)?)(w|x))?$/i', trim($candidate), $match)) continue;
+        $resolved = feedpublisher_resolve_relative_content_url($match[1], $base);
+        if ($resolved === '') continue;
+        $score = isset($match[2]) ? (float) $match[2] : (float) ++$position;
+        if (isset($match[3]) && strtolower($match[3]) === 'x') $score *= 10000;
+        if ($score >= $bestScore) { $best = $resolved; $bestScore = $score; }
+    }
+    return $best;
+}
+
+function feedpublisher_fulltext_placeholder_image($url)
+{
+    $path = strtolower((string) parse_url(trim((string) $url), PHP_URL_PATH));
+    $name = basename($path);
+    return $name !== '' && (bool) preg_match('/(?:^|[-_.])(placeholder|spacer|transparent|blank|pixel)(?:[-_.]|$)/', $name);
 }
 
 function feedpublisher_fulltext_remove_article_chrome(DOMXPath $xpath, DOMElement $article)

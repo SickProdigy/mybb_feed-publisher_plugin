@@ -2,6 +2,8 @@
 
 ## 1.0.3 - 2026-09-17
 
+- Promote safe lazy-loaded article image URLs during full-text extraction and
+  discard placeholder-only image sources.
 - Added optional per-feed full-article URL regex rewriting for stale article hosts, with validation, SSRF protections, diagnostics, and configuration portability.
 - Added an opt-in live feed audit utility for checking parsing, rendered output, full-article extraction, suspicious page furniture, and unusually thin or large posts.
 
