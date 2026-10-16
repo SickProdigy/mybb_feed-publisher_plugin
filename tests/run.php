@@ -1036,7 +1036,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $queueSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
     $operationsSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/operations.php');
-    $t->assertContains("'version' => '1.0.10'", $source);
+    $t->assertContains("'version' => '1.0.11'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.11 - 2026-10-16
+
+- Correct the add/edit form order so Discord delivery appears directly above Optional AI cleanup, and both appear above Scheduling and publishing.
+
 ## 1.0.10 - 2026-10-16
 
 - Move optional AI settings to the end of the add/edit feed form.
