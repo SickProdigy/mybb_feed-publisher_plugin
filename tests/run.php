@@ -1036,7 +1036,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $queueSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
     $operationsSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/operations.php');
-    $t->assertContains("'version' => '1.0.7'", $source);
+    $t->assertContains("'version' => '1.0.8'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
@@ -1088,7 +1088,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
 });
 
 $suite->test('AI cleanup is optional, bounded, strictly validated, and falls back', function ($t) {
-    $feed=array('id'=>901,'ai_enabled'=>1,'ai_endpoint'=>'http://192.168.1.2:8080/v1/chat/completions','ai_api_key'=>'secret','ai_model'=>'local-model','ai_prompt'=>'Tighten wording.','ai_timeout_seconds'=>10,'ai_max_tokens'=>512,'ai_max_per_run'=>2);
+    $feed=array('id'=>901,'ai_enabled'=>1,'ai_endpoint'=>'http://192.168.1.2:8080/v1/chat/completions','ai_api_key'=>'secret','ai_model'=>'local-model','ai_prompt'=>'Tighten wording.','ai_timeout_seconds'=>10,'ai_max_tokens'=>512,'ai_max_per_run'=>2,'ai_json_mode'=>1,'ai_no_think'=>1);
     $item=array('title'=>'Original','content'=>'Original body');
     $sender=function($f,$payload) use($t){$t->assertSame(0,$payload['temperature']);return array('choices'=>array(array('message'=>array('content'=>'{"title":"Clean title","body":"Clean body"}'))));};
     $result=feedpublisher_ai_apply($feed,$item,$sender);$t->assertTrue($result['applied']);$t->assertSame('Clean title',$result['item']['title']);
@@ -1098,6 +1098,9 @@ $suite->test('AI cleanup is optional, bounded, strictly validated, and falls bac
     $disabled=feedpublisher_ai_apply(array('ai_enabled'=>0),$item,function(){throw new RuntimeException('must not run');});$t->assertSame($item,$disabled['item']);
     $t->assertTrue(feedpublisher_ai_endpoint_valid('http://127.0.0.1:8080/v1/chat/completions'));
     $t->assertTrue(!feedpublisher_ai_endpoint_valid('http://user:pass@host/v1/chat/completions'));
+    $t->assertSame(array('title'=>'Fenced','body'=>'Body'), feedpublisher_ai_validate_result(feedpublisher_ai_json_content("```json\n{\"title\":\"Fenced\",\"body\":\"Body\"}\n```")));
+    $t->expectException('RuntimeException', function(){feedpublisher_ai_validate_result(array('title'=>'Injected','body'=>'[url=https://evil.example]bad[/url]'),'Original');});
+    $t->assertContains("'test_ai'", file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/admin.php'));
 });
 
 $suite->test('documentation covers deployment and known safety limits', function ($t) {

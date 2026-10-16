@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.8 - 2026-10-16
+
+- Reject AI output that introduces any URL absent from deterministic content or contains an unsafe URL.
+- Add llama.cpp compatibility controls for JSON mode and reasoning-model `/no_think` requests, fenced-JSON parsing, and explicit token-exhaustion errors.
+- Add a confirmed ACP provider test that sends synthetic content only.
+
 ## 1.0.7 - 2026-10-16
 
 - Add optional, disabled-by-default AI title/body cleanup through configurable OpenAI-compatible chat-completions endpoints, including local llama.cpp.

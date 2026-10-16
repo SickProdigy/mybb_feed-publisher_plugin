@@ -225,6 +225,16 @@ Each feed can optionally send its cleaned entry title and body to an OpenAI-comp
 
 The provider receives the entry title, cleaned body, and configured per-feed instructions. Requests use temperature zero, one attempt, a 3-60 second timeout, a 128-4096 token output limit, and a 1-10 request per-run ceiling. Output must be JSON containing exactly non-empty `title` and `body` strings and pass safety validation. Any failure retains deterministic content. API keys are masked, and AI credentials and endpoints are excluded from configuration exports. Preview visibly compares deterministic and AI output when AI is enabled; this makes real provider requests within the configured per-run limit.
 
+AI output may reuse only HTTP(S) URLs already present in the deterministic input; newly invented or unsafe URLs reject the entire AI result. The Operations page can send a confirmed synthetic connection test. Reasoning models can use the no-thinking option, while JSON response mode can be disabled for compatible servers that do not implement `response_format`.
+
+An opt-in command-line probe is also available and is not part of the normal test suite:
+
+```sh
+php tests/test_ai.php --endpoint=http://llama-host:8080/v1/chat/completions --model=model-alias --no-think
+```
+
+Set `FEEDPUBLISHER_AI_API_KEY` in the command environment when authentication is required; do not place keys in command arguments. If llama.cpp is not reachable from the web server, expose it through a private VPN/overlay network or an authenticated TLS reverse proxy restricted to the web server. Do not expose an unauthenticated llama.cpp port directly to the public internet.
+
 ## Discord Notifications
 
 Each feed can optionally queue a Discord notification after its MyBB thread is

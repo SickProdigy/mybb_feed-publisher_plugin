@@ -490,7 +490,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         'fulltext_url_replacement' => '',
         'fulltext_summary_chars' => 600,
         'fulltext_max_per_run' => 3,
-        'ai_enabled' => 0, 'ai_endpoint' => '', 'ai_api_key' => '', 'ai_model' => '', 'ai_prompt' => '', 'ai_timeout_seconds' => 20, 'ai_max_tokens' => 2048, 'ai_max_per_run' => 3,
+        'ai_enabled' => 0, 'ai_endpoint' => '', 'ai_api_key' => '', 'ai_model' => '', 'ai_prompt' => '', 'ai_timeout_seconds' => 20, 'ai_max_tokens' => 2048, 'ai_max_per_run' => 3, 'ai_json_mode' => 1, 'ai_no_think' => 0,
         'discord_enabled' => 0,
         'discord_webhook_url' => '',
         'discord_message_template' => "{title}\n{thread_url}",
@@ -591,6 +591,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
     $container->output_row('Model', 'The model or alias exposed by the provider.', $form->generate_text_box('ai_model', $values['ai_model'], array('maxlength' => 200)));
     $container->output_row('Per-feed instructions', 'Optional cleanup rules, maximum 4,000 bytes. The source content and these instructions are sent to the provider.', $form->generate_text_area('ai_prompt', $values['ai_prompt']));
     $container->output_row('Request limits', 'One request per entry with no automatic AI retry.', 'Timeout: ' . $form->generate_numeric_field('ai_timeout_seconds', (int) $values['ai_timeout_seconds'], array('min' => 3, 'max' => 60)) . ' &nbsp; Maximum output tokens: ' . $form->generate_numeric_field('ai_max_tokens', (int) $values['ai_max_tokens'], array('min' => 128, 'max' => 4096)) . ' &nbsp; Requests per run: ' . $form->generate_numeric_field('ai_max_per_run', (int) $values['ai_max_per_run'], array('min' => 1, 'max' => 10)));
+    $container->output_row('Provider compatibility', 'JSON mode asks compatible servers to constrain output. No-thinking prepends /no_think for reasoning models such as the tested llama.cpp Qwen model.', $form->generate_check_box('ai_json_mode', 1, 'Request JSON response mode', array('checked' => !empty($values['ai_json_mode']))) . '<br>' . $form->generate_check_box('ai_no_think', 1, 'Request no-thinking output', array('checked' => !empty($values['ai_no_think']))));
     $container->end();
 
     $container = new FormContainer('Discord delivery');
@@ -841,6 +842,7 @@ function feedpublisher_admin_save()
         'ai_model' => trim($mybb->get_input('ai_model')), 'ai_prompt' => trim($mybb->get_input('ai_prompt')),
         'ai_timeout_seconds' => $mybb->get_input('ai_timeout_seconds', MyBB::INPUT_INT), 'ai_max_tokens' => $mybb->get_input('ai_max_tokens', MyBB::INPUT_INT),
         'ai_max_per_run' => $mybb->get_input('ai_max_per_run', MyBB::INPUT_INT),
+        'ai_json_mode' => $mybb->get_input('ai_json_mode', MyBB::INPUT_INT) ? 1 : 0, 'ai_no_think' => $mybb->get_input('ai_no_think', MyBB::INPUT_INT) ? 1 : 0,
         'discord_enabled' => $mybb->get_input('discord_enabled', MyBB::INPUT_INT) ? 1 : 0,
         'discord_webhook_url' => trim($mybb->get_input('discord_webhook_url')),
         'discord_message_template' => $mybb->get_input('discord_message_template'),
@@ -1117,6 +1119,7 @@ function feedpublisher_admin_save()
         'ai_api_key' => $db->escape_string($values['ai_api_key']), 'ai_model' => $db->escape_string($values['ai_model']),
         'ai_prompt' => $db->escape_string($values['ai_prompt']), 'ai_timeout_seconds' => $values['ai_timeout_seconds'], 'ai_max_tokens' => $values['ai_max_tokens'],
         'ai_max_per_run' => $values['ai_max_per_run'],
+        'ai_json_mode' => $values['ai_json_mode'], 'ai_no_think' => $values['ai_no_think'],
         'discord_enabled' => $values['discord_enabled'],
         'discord_webhook_url' => $db->escape_string($values['discord_webhook_url']),
         'discord_message_template' => $db->escape_string($values['discord_message_template']),
@@ -1586,6 +1589,13 @@ function feedpublisher_admin_operations_page()
     $table->construct_cell(ob_get_clean());
     $table->construct_row();
 
+    $table->construct_cell('<strong>AI provider test</strong><br><small>Sends one synthetic title and body to the saved provider. No feed or forum content is sent.</small>');
+    $table->construct_cell('Enabled: ' . (!empty($feed['ai_enabled']) ? 'Yes' : 'No') . '<br>Model: ' . htmlspecialchars_uni($feed['ai_model'] ?: 'Not configured'));
+    ob_start();
+    feedpublisher_admin_operation_form($id, 'test_ai', 'Test AI connection', 'Confirm sending one synthetic test entry to the saved AI provider.');
+    $table->construct_cell(ob_get_clean());
+    $table->construct_row();
+
     $table->construct_cell('<strong>Publish next batch</strong><br><small>Bypass the interval, but retain the feed pause and maximum-post limit.</small>');
     $table->construct_cell('Queued: ' . $counts['queued'] . '<br>Publishing: ' . (!empty($feed['publishing_paused']) ? 'Paused' : 'Active'));
     ob_start();
@@ -1705,7 +1715,7 @@ function feedpublisher_admin_operation_commit()
         admin_redirect('index.php?module=config/feedpublisher');
     }
 
-    $confirmedOperations = array('toggle_pause', 'reset_backoff', 'clear_queue', 'retention_cleanup', 'resolve_uncertain', 'delete_threads', 'retry_webhooks', 'test_webhook');
+    $confirmedOperations = array('toggle_pause', 'reset_backoff', 'clear_queue', 'retention_cleanup', 'resolve_uncertain', 'delete_threads', 'retry_webhooks', 'test_webhook', 'test_ai');
     if (in_array($operation, $confirmedOperations, true) && !$mybb->get_input('confirm', MyBB::INPUT_INT)) {
         flash_message('Confirm the requested state-changing operation before continuing.', 'error');
         admin_redirect('index.php?module=config/feedpublisher&action=operations&id=' . $id);
@@ -1763,6 +1773,10 @@ function feedpublisher_admin_operation_commit()
                     : 'Discord did not confirm the test delivery.');
             }
             $message = 'Discord confirmed the test message.';
+        } elseif ($operation === 'test_ai') {
+            if (empty($feed['ai_enabled'])) throw new RuntimeException('Enable AI cleanup and save its provider settings before testing.');
+            $result = feedpublisher_ai_request($feed, array('title' => 'Feed Publisher connection test', 'content' => 'This is synthetic test content. Return it safely.'));
+            $message = 'AI provider returned valid output for model ' . $feed['ai_model'] . ': ' . my_substr($result['title'], 0, 80) . '.';
         } elseif ($operation === 'delete_threads') {
             if (!$mybb->get_input('confirm_really', MyBB::INPUT_INT)
                 || !$mybb->get_input('confirm_last_chance', MyBB::INPUT_INT)) {
