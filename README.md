@@ -219,6 +219,12 @@ another article's allowance nor prevents later entries from being processed.
 Successful feed checks do not erase pending entry retries. A configurable limit
 of 1-10 article requests per run defers overflow without losing entries.
 
+## Optional AI cleanup
+
+Each feed can optionally send its cleaned entry title and body to an OpenAI-compatible `/v1/chat/completions` endpoint before queueing. This is disabled by default and ordinary publishing has no AI dependency. It works with local llama.cpp servers and remote compatible providers.
+
+The provider receives the entry title, cleaned body, and configured per-feed instructions. Requests use temperature zero, one attempt, a 3-60 second timeout, a 128-4096 token output limit, and a 1-10 request per-run ceiling. Output must be JSON containing exactly non-empty `title` and `body` strings and pass safety validation. Any failure retains deterministic content. API keys are masked, and AI credentials and endpoints are excluded from configuration exports. Preview visibly compares deterministic and AI output when AI is enabled; this makes real provider requests within the configured per-run limit.
+
 ## Discord Notifications
 
 Each feed can optionally queue a Discord notification after its MyBB thread is
@@ -364,7 +370,7 @@ pages immediately after use because they expose server details.
 - Feed and article responses are limited to 2 MiB.
 - Supported source encodings are UTF-8, BOM-marked UTF-16, ISO-8859-1, and
   Windows-1252. Conflicting HTTP, BOM, and XML declarations are rejected.
-- Remote attachment downloads, iframe embeds, and AI cleanup are not provided.
+- Remote attachment downloads and iframe embeds are not provided.
 - Automated test doubles do not replace real MyBB database, task, permission,
   and end-to-end publication checks.
 

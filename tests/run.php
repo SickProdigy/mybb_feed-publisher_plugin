@@ -40,6 +40,7 @@ require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/fulltext.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/portability.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/operations.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/webhook.php';
+require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/ai.php';
 
 class FeedPublisherTestSuite
 {
@@ -1035,7 +1036,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $queueSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
     $operationsSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/operations.php');
-    $t->assertContains("'version' => '1.0.6'", $source);
+    $t->assertContains("'version' => '1.0.7'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
@@ -1078,9 +1079,25 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("name=\"confirm_really\"", $adminSource);
     $t->assertContains("name=\"confirm_last_chance\"", $adminSource);
     $t->assertContains("'publishing_paused' => 1", $adminSource);
+    $t->assertContains("'ai_api_key', 'discord_webhook_url'", $adminSource);
+    $t->assertNotContains('ai_api_key', implode(',', feedpublisher_portability_config_fields()));
+    $t->assertNotContains('ai_endpoint', implode(',', feedpublisher_portability_config_fields()));
     $t->assertContains('function feedpublisher_delete_feed_threads', $operationsSource);
     $t->assertContains('delete_thread($tid)', $operationsSource);
     $t->assertContains("array('tid' => 0, 'pid' => 0)", $operationsSource);
+});
+
+$suite->test('AI cleanup is optional, bounded, strictly validated, and falls back', function ($t) {
+    $feed=array('id'=>901,'ai_enabled'=>1,'ai_endpoint'=>'http://192.168.1.2:8080/v1/chat/completions','ai_api_key'=>'secret','ai_model'=>'local-model','ai_prompt'=>'Tighten wording.','ai_timeout_seconds'=>10,'ai_max_tokens'=>512,'ai_max_per_run'=>2);
+    $item=array('title'=>'Original','content'=>'Original body');
+    $sender=function($f,$payload) use($t){$t->assertSame(0,$payload['temperature']);return array('choices'=>array(array('message'=>array('content'=>'{"title":"Clean title","body":"Clean body"}'))));};
+    $result=feedpublisher_ai_apply($feed,$item,$sender);$t->assertTrue($result['applied']);$t->assertSame('Clean title',$result['item']['title']);
+    $bad=feedpublisher_ai_apply($feed,$item,function(){return array('choices'=>array(array('message'=>array('content'=>'{"title":"Bad","body":"[script]x[/script]"}'))));});
+    $t->assertTrue(!$bad['applied']);$t->assertSame($item,$bad['item']);
+    $limited=feedpublisher_ai_apply($feed,$item,$sender);$t->assertTrue(!$limited['applied']);$t->assertContains('limit reached',$limited['message']);
+    $disabled=feedpublisher_ai_apply(array('ai_enabled'=>0),$item,function(){throw new RuntimeException('must not run');});$t->assertSame($item,$disabled['item']);
+    $t->assertTrue(feedpublisher_ai_endpoint_valid('http://127.0.0.1:8080/v1/chat/completions'));
+    $t->assertTrue(!feedpublisher_ai_endpoint_valid('http://user:pass@host/v1/chat/completions'));
 });
 
 $suite->test('documentation covers deployment and known safety limits', function ($t) {

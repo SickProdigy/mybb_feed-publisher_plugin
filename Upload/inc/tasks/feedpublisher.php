@@ -17,6 +17,7 @@ function task_feedpublisher($task)
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/queue.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/operations.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/webhook.php';
+    require_once MYBB_ROOT . 'inc/plugins/feedpublisher/ai.php';
     $publisherFile = MYBB_ROOT . 'inc/plugins/feedpublisher/publisher.php';
     if (is_file($publisherFile)) {
         require_once $publisherFile;

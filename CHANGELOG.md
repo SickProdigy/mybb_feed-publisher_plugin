@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.7 - 2026-10-16
+
+- Add optional, disabled-by-default AI title/body cleanup through configurable OpenAI-compatible chat-completions endpoints, including local llama.cpp.
+- Strictly validate JSON output, bound requests, timeout, and output size, disable automatic retries, and keep deterministic content on every provider failure.
+- Mask API keys, exclude AI credentials and endpoints from portable exports, and disclose which entry content is sent to the provider.
+
 ## 1.0.6 - 2026-10-16
 
 - Add a triple-confirmed per-feed operation that pauses publishing and deletes

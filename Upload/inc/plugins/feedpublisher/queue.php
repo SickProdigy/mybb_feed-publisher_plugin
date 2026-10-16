@@ -101,6 +101,11 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
         return 'full';
     }
     $prepared = in_array($state, array('queued', 'pending_approval'), true) ? feedpublisher_prepare_item($feed, $item) : null;
+    $aiMessage = '';
+    if ($prepared && function_exists('feedpublisher_ai_apply')) {
+        $candidate = $item; $candidate['content'] = $prepared['content']; $ai = feedpublisher_ai_apply($feed, $candidate);
+        $item['title'] = $ai['item']['title']; $prepared['content'] = $ai['item']['content']; $aiMessage = $ai['message'];
+    }
 
     $record = array(
         'feed_id' => $feedId,
@@ -118,6 +123,7 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
         'published_at' => in_array($state, array('queued', 'pending_approval'), true) ? 0 : TIME_NOW,
     );
     $db->insert_query('feedpublisher_queue', $record);
+    if ($aiMessage !== '' && !empty($feed['ai_enabled'])) feedpublisher_log_event($feedId, 'ai', strpos($aiMessage, 'applied') !== false ? 'info' : 'warning', $aiMessage);
     if (!in_array($state, array('queued', 'pending_approval'), true)) {
         $disposition = isset($item['_disposition']) && in_array($item['_disposition'], array('filtered', 'skipped', 'rejected'), true)
             ? $item['_disposition'] : $state;

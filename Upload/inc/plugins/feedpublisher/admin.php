@@ -25,6 +25,7 @@ function feedpublisher_admin_controller()
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/publisher.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/operations.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/webhook.php';
+    require_once MYBB_ROOT . 'inc/plugins/feedpublisher/ai.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/portability.php';
 
     $action = $mybb->get_input('action');
@@ -489,6 +490,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         'fulltext_url_replacement' => '',
         'fulltext_summary_chars' => 600,
         'fulltext_max_per_run' => 3,
+        'ai_enabled' => 0, 'ai_endpoint' => '', 'ai_api_key' => '', 'ai_model' => '', 'ai_prompt' => '', 'ai_timeout_seconds' => 20, 'ai_max_tokens' => 2048, 'ai_max_per_run' => 3,
         'discord_enabled' => 0,
         'discord_webhook_url' => '',
         'discord_message_template' => "{title}\n{thread_url}",
@@ -579,6 +581,16 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         . ' ' . $form->generate_submit_button('Test connection', array('name' => 'test_connection'))
         . ' ' . $form->generate_submit_button('Find feeds', array('name' => 'find_feeds')));
     $container->output_row('Name', 'A descriptive name shown in the Admin CP and task logs. Leave blank to generate one from the feed URL.', $form->generate_text_box('name', $values['name']));
+    $container->end();
+
+    $container = new FormContainer('Optional AI cleanup');
+    $container->output_row('AI cleanup', 'Disabled by default. When enabled, each new entry title and cleaned body are sent to the configured provider before queueing. Provider failures keep the deterministic result.', $form->generate_check_box('ai_enabled', 1, 'Send entry content to an OpenAI-compatible provider', array('checked' => !empty($values['ai_enabled']))));
+    $container->output_row('Endpoint', 'OpenAI-compatible chat-completions URL. HTTP is allowed for an administrator-configured local llama.cpp server; use HTTPS for remote providers.', $form->generate_text_box('ai_endpoint', $values['ai_endpoint'], array('maxlength' => 2048, 'placeholder' => 'http://server:8080/v1/chat/completions')));
+    $savedAiKey = !empty($values['id']) && !empty($values['ai_api_key']);
+    $container->output_row('API key', 'Optional for llama.cpp. Saved keys are masked and excluded from exports and logs. Leave blank while editing to keep the saved key.', $form->generate_password_box('ai_api_key', '', array('autocomplete' => 'new-password', 'placeholder' => $savedAiKey ? 'Saved - leave blank to keep' : 'Optional')));
+    $container->output_row('Model', 'The model or alias exposed by the provider.', $form->generate_text_box('ai_model', $values['ai_model'], array('maxlength' => 200)));
+    $container->output_row('Per-feed instructions', 'Optional cleanup rules, maximum 4,000 bytes. The source content and these instructions are sent to the provider.', $form->generate_text_area('ai_prompt', $values['ai_prompt']));
+    $container->output_row('Request limits', 'One request per entry with no automatic AI retry.', 'Timeout: ' . $form->generate_numeric_field('ai_timeout_seconds', (int) $values['ai_timeout_seconds'], array('min' => 3, 'max' => 60)) . ' &nbsp; Maximum output tokens: ' . $form->generate_numeric_field('ai_max_tokens', (int) $values['ai_max_tokens'], array('min' => 128, 'max' => 4096)) . ' &nbsp; Requests per run: ' . $form->generate_numeric_field('ai_max_per_run', (int) $values['ai_max_per_run'], array('min' => 1, 'max' => 10)));
     $container->end();
 
     $container = new FormContainer('Discord delivery');
@@ -824,6 +836,11 @@ function feedpublisher_admin_save()
         'fulltext_url_replacement' => trim($mybb->get_input('fulltext_url_replacement')),
         'fulltext_summary_chars' => $mybb->get_input('fulltext_summary_chars', MyBB::INPUT_INT),
         'fulltext_max_per_run' => $mybb->get_input('fulltext_max_per_run', MyBB::INPUT_INT),
+        'ai_enabled' => $mybb->get_input('ai_enabled', MyBB::INPUT_INT) ? 1 : 0,
+        'ai_endpoint' => trim($mybb->get_input('ai_endpoint')), 'ai_api_key' => trim($mybb->get_input('ai_api_key')),
+        'ai_model' => trim($mybb->get_input('ai_model')), 'ai_prompt' => trim($mybb->get_input('ai_prompt')),
+        'ai_timeout_seconds' => $mybb->get_input('ai_timeout_seconds', MyBB::INPUT_INT), 'ai_max_tokens' => $mybb->get_input('ai_max_tokens', MyBB::INPUT_INT),
+        'ai_max_per_run' => $mybb->get_input('ai_max_per_run', MyBB::INPUT_INT),
         'discord_enabled' => $mybb->get_input('discord_enabled', MyBB::INPUT_INT) ? 1 : 0,
         'discord_webhook_url' => trim($mybb->get_input('discord_webhook_url')),
         'discord_message_template' => $mybb->get_input('discord_message_template'),
@@ -983,6 +1000,9 @@ function feedpublisher_admin_save()
     $errors = array_merge($errors, feedpublisher_fulltext_url_rewrite_errors($values['fulltext_url_regex'], $values['fulltext_url_replacement']));
     if ($values['fulltext_summary_chars'] < 100 || $values['fulltext_summary_chars'] > 5000) $errors[] = 'Full-article summary threshold must be between 100 and 5000 characters.';
     if ($values['fulltext_max_per_run'] < 1 || $values['fulltext_max_per_run'] > 10) $errors[] = 'Full-article fetches per run must be between 1 and 10.';
+    if ($values['ai_api_key'] === '' && $currentFeed) $values['ai_api_key'] = $currentFeed['ai_api_key'];
+    foreach (feedpublisher_ai_config_errors($values) as $aiError) $errors[] = $aiError;
+    if ($values['ai_max_per_run'] < 1 || $values['ai_max_per_run'] > 10) $errors[] = 'AI requests per run must be between 1 and 10.';
     $ruleErrors = array();
     feedpublisher_eligibility_rules($values['eligibility_rules'], $ruleErrors);
     foreach ($ruleErrors as $ruleError) { $errors[] = $ruleError; }
@@ -1093,6 +1113,10 @@ function feedpublisher_admin_save()
         'fulltext_url_replacement' => $db->escape_string($values['fulltext_url_replacement']),
         'fulltext_summary_chars' => $values['fulltext_summary_chars'],
         'fulltext_max_per_run' => $values['fulltext_max_per_run'],
+        'ai_enabled' => $values['ai_enabled'], 'ai_endpoint' => $db->escape_string($values['ai_endpoint']),
+        'ai_api_key' => $db->escape_string($values['ai_api_key']), 'ai_model' => $db->escape_string($values['ai_model']),
+        'ai_prompt' => $db->escape_string($values['ai_prompt']), 'ai_timeout_seconds' => $values['ai_timeout_seconds'], 'ai_max_tokens' => $values['ai_max_tokens'],
+        'ai_max_per_run' => $values['ai_max_per_run'],
         'discord_enabled' => $values['discord_enabled'],
         'discord_webhook_url' => $db->escape_string($values['discord_webhook_url']),
         'discord_message_template' => $db->escape_string($values['discord_message_template']),
@@ -1294,6 +1318,8 @@ function feedpublisher_admin_initial_preview($values)
             $percent = $prepared['raw_bytes'] > 0 ? round(($removed / $prepared['raw_bytes']) * 100, 1) : 0;
             $previewItem = array('source_url' => !empty($item['source_url']) ? $item['source_url'] : $item['url'], 'title' => $item['title'], 'content' => $prepared['content'], 'author' => isset($item['author']) ? $item['author'] : '', 'source_published' => isset($item['published']) ? $item['published'] : 0, 'media' => isset($item['media']) ? $item['media'] : array());
             $composed = feedpublisher_compose_post($values, $previewItem);
+            $aiPreview = function_exists('feedpublisher_ai_apply') ? feedpublisher_ai_apply($values, $previewItem) : array('item' => array(), 'applied' => false, 'message' => 'AI module unavailable.');
+            if ($aiPreview['applied']) $aiPreview['item'] = feedpublisher_compose_post($values, $aiPreview['item']);
             $exampleTitle = $composed['title'];
             $previewUser = !empty($values['uid']) ? get_user((int) $values['uid']) : array();
             $availablePreviewPrefixes = feedpublisher_available_thread_prefixes((int) $values['fid'], $previewUser);
@@ -1337,6 +1363,7 @@ function feedpublisher_admin_initial_preview($values)
                 . '<h3 style="margin-bottom:5px">Example body</h3>'
                 . '<pre style="white-space:pre-wrap;max-height:28em;overflow:auto;padding:10px;border:1px solid #ccc;background:#f7f7f7">'
                 . htmlspecialchars_uni($exampleBody) . '</pre>';
+            if (!empty($values['ai_enabled'])) echo '<h3 style="margin-bottom:5px">AI comparison</h3><p>' . htmlspecialchars_uni($aiPreview['message']) . '</p>' . ($aiPreview['applied'] ? '<div style="padding:10px;border:1px solid #ccc;background:#f7f7f7"><strong>' . htmlspecialchars_uni($aiPreview['item']['title']) . '</strong><pre style="white-space:pre-wrap">' . htmlspecialchars_uni($aiPreview['item']['body']) . '</pre></div>' : '');
         } catch (Throwable $exception) {
             echo '<tr><th style="text-align:left;padding:6px">Conversion</th><td style="padding:6px;color:#a00">Failed: '
                 . htmlspecialchars_uni($exception->getMessage()) . '</td></tr></table>';
@@ -1355,7 +1382,7 @@ function feedpublisher_admin_initial_preview($values)
         echo '<form method="post" action="index.php?module=config/feedpublisher&amp;action=save" style="display:inline;margin:0">'
             . '<input type="hidden" name="my_post_key" value="' . htmlspecialchars_uni($GLOBALS['mybb']->post_code) . '">';
         foreach ($values as $field => $value) {
-            if (in_array($field, array('preview_initial', 'refresh_prefixes', 'test_connection', 'find_feeds'), true)) {
+            if (in_array($field, array('preview_initial', 'refresh_prefixes', 'test_connection', 'find_feeds', 'ai_api_key', 'discord_webhook_url'), true)) {
                 continue;
             }
             if (is_array($value)) {
