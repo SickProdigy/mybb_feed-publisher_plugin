@@ -1036,7 +1036,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $queueSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
     $operationsSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/operations.php');
-    $t->assertContains("'version' => '1.0.9'", $source);
+    $t->assertContains("'version' => '1.0.10'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
@@ -1080,6 +1080,11 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("name=\"confirm_last_chance\"", $adminSource);
     $t->assertContains("'publishing_paused' => 1", $adminSource);
     $t->assertContains("'ai_api_key', 'discord_webhook_url'", $adminSource);
+    $t->assertContains('fp-collapsible fp-section-content', $adminSource);
+    $t->assertContains('fp-collapsible fp-section-output', $adminSource);
+    $t->assertContains('fp-collapsible fp-section-ai', $adminSource);
+    $t->assertContains('window.localStorage.setItem', $adminSource);
+    $t->assertContains('var formHasErrors=', $adminSource);
     $t->assertNotContains('ai_api_key', implode(',', feedpublisher_portability_config_fields()));
     $t->assertNotContains('ai_endpoint', implode(',', feedpublisher_portability_config_fields()));
     $t->assertContains('function feedpublisher_delete_feed_threads', $operationsSource);

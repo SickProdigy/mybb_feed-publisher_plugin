@@ -542,14 +542,22 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
     }
     echo '<script>'
         . 'document.addEventListener("DOMContentLoaded",function(){'
+        . 'var formHasErrors=' . ($errors ? 'true' : 'false') . ';'
         . 'var policy=document.querySelector("select[name=initial_policy]");'
         . 'var count=document.querySelector("input[name=initial_limit]");'
-        . 'if(!policy||!count){return;}'
-        . 'var row=count.closest?count.closest("tr"):null;'
-        . 'function toggle(){if(row){row.style.display=policy.value==="recent"?"":"none";}count.disabled=policy.value!=="recent";}'
-        . 'policy.addEventListener("change",toggle);toggle();'
+        . 'if(policy&&count){var row=count.closest?count.closest("tr"):null;'
+        . 'var toggleCount=function(){if(row){row.style.display=policy.value==="recent"?"":"none";}count.disabled=policy.value!=="recent";};'
+        . 'policy.addEventListener("change",toggleCount);toggleCount();}'
+        . 'Array.prototype.forEach.call(document.querySelectorAll("table.fp-collapsible"),function(table){'
+        . 'var wrapper=table.parentNode;var title=null;for(var i=0;i<wrapper.children.length;i++){if((" "+wrapper.children[i].className+" ").indexOf(" title ")!==-1){title=wrapper.children[i];break;}}if(!title){return;}'
+        . 'var match=table.className.match(/fp-section-([a-z0-9_-]+)/);var key="feedpublisher-section-"+(match?match[1]:"section");var saved=null;try{saved=window.localStorage.getItem(key);}catch(ignore){}'
+        . 'var open=formHasErrors?true:(saved===null?table.className.indexOf("fp-default-open")!==-1:saved==="open");'
+        . 'var button=document.createElement("button");button.type="button";button.className="fp-section-toggle";'
+        . 'function render(){table.style.display=open?"":"none";button.setAttribute("aria-expanded",open?"true":"false");button.textContent=open?"Hide":"Show";button.title=(open?"Collapse ":"Expand ")+title.textContent.replace(/Hide$|Show$/,"").trim();}'
+        . 'button.addEventListener("click",function(){open=!open;try{window.localStorage.setItem(key,open?"open":"closed");}catch(ignore){}render();});title.appendChild(button);render();'
         . '});'
-        . '</script>';
+        . '});'
+        . '</script><style>.fp-section-toggle{float:right;margin:-3px 0 -3px 12px;padding:2px 10px;cursor:pointer}.fp-collapsible[style*="display: none"]{margin-bottom:0}</style>';
 
     $forums = array(0 => 'Select a forum');
     $query = $db->simple_select('forums', 'fid,name', "type='f'", array('order_by' => 'disporder,name'));
@@ -583,19 +591,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
     $container->output_row('Name', 'A descriptive name shown in the Admin CP and task logs. Leave blank to generate one from the feed URL.', $form->generate_text_box('name', $values['name']));
     $container->end();
 
-    $container = new FormContainer('Optional AI cleanup');
-    $container->output_row('AI cleanup', 'Disabled by default. When enabled, each new entry title and cleaned body are sent to the configured provider before queueing. Provider failures keep the deterministic result.', $form->generate_check_box('ai_enabled', 1, 'Send entry content to an OpenAI-compatible provider', array('checked' => !empty($values['ai_enabled']))));
-    $container->output_row('AI handling', 'Replace uses validated output automatically. Review-only preserves deterministic content and holds the separate AI suggestion for administrator approval.', $form->generate_select_box('ai_mode', array('replace'=>'Replace after validation','review'=>'Review suggestion before publishing'), $values['ai_mode']));
-    $container->output_row('Endpoint', 'OpenAI-compatible chat-completions URL. HTTP is allowed for an administrator-configured local llama.cpp server; use HTTPS for remote providers.', $form->generate_text_box('ai_endpoint', $values['ai_endpoint'], array('maxlength' => 2048, 'placeholder' => 'http://server:8080/v1/chat/completions')));
-    $savedAiKey = !empty($values['id']) && !empty($values['ai_api_key']);
-    $container->output_row('API key', 'Optional for llama.cpp. Saved keys are masked and excluded from exports and logs. Leave blank while editing to keep the saved key.', $form->generate_password_box('ai_api_key', '', array('autocomplete' => 'new-password', 'placeholder' => $savedAiKey ? 'Saved - leave blank to keep' : 'Optional')));
-    $container->output_row('Model', 'The model or alias exposed by the provider.', $form->generate_text_box('ai_model', $values['ai_model'], array('maxlength' => 200)));
-    $container->output_row('Per-feed instructions', 'Optional cleanup rules, maximum 4,000 bytes. The source content and these instructions are sent to the provider.', $form->generate_text_area('ai_prompt', $values['ai_prompt']));
-    $container->output_row('Request limits', 'One request per entry with no automatic AI retry.', 'Timeout: ' . $form->generate_numeric_field('ai_timeout_seconds', (int) $values['ai_timeout_seconds'], array('min' => 3, 'max' => 60)) . ' &nbsp; Maximum output tokens: ' . $form->generate_numeric_field('ai_max_tokens', (int) $values['ai_max_tokens'], array('min' => 128, 'max' => 4096)) . ' &nbsp; Requests per run: ' . $form->generate_numeric_field('ai_max_per_run', (int) $values['ai_max_per_run'], array('min' => 1, 'max' => 10)));
-    $container->output_row('Provider compatibility', 'JSON mode asks compatible servers to constrain output. No-thinking prepends /no_think for reasoning models such as the tested llama.cpp Qwen model.', $form->generate_check_box('ai_json_mode', 1, 'Request JSON response mode', array('checked' => !empty($values['ai_json_mode']))) . '<br>' . $form->generate_check_box('ai_no_think', 1, 'Request no-thinking output', array('checked' => !empty($values['ai_no_think']))));
-    $container->end();
-
-    $container = new FormContainer('Discord delivery');
+    $container = new FormContainer('Discord delivery', 'fp-collapsible fp-section-discord' . (!empty($values['discord_enabled']) ? ' fp-default-open' : ''));
     $container->output_row('Discord webhook', 'Optional. After a MyBB thread is published, queue a separate Discord notification. Discord failures never undo or retry the MyBB publication.',
         $form->generate_check_box('discord_enabled', 1, 'Send published threads to Discord', array('checked' => !empty($values['discord_enabled']))));
     $savedWebhook = !empty($values['id']) && !empty($values['discord_webhook_url']);
@@ -635,7 +631,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         $form->generate_check_box('strict_reconciliation', 1, 'Reject missing unpublished queue entries', array('checked' => !empty($values['strict_reconciliation']))));
     $container->end();
 
-    $container = new FormContainer('Entry content and filtering');
+    $container = new FormContainer('Entry content and filtering', 'fp-collapsible fp-section-content');
     $container->output_row('Entry eligibility rules', 'Optional, one per line. Examples: include title: giveaway; exclude url: /sponsored/; include category: releases; exclude body: pre-order; include-regex title: ~free (game|weekend)~i. Any matching exclusion rejects; when includes exist, at least one must match.',
         $form->generate_text_area('eligibility_rules', $values['eligibility_rules']));
     $container->output_row('Source age eligibility', '0 disables a limit. Entries without a valid source date are rejected when either age filter is enabled.',
@@ -665,7 +661,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
     }
     $container->end();
 
-    $container = new FormContainer('Post output and cleanup');
+    $container = new FormContainer('Post output and cleanup', 'fp-collapsible fp-section-output');
     $container->output_row('Source attribution <em>*</em>', 'Optionally append a source link to every imported thread. New feeds default to none.', $form->generate_select_box('attribution_mode', array('link' => 'Source link', 'title_link' => 'Linked source title', 'none' => 'None'), $values['attribution_mode']));
     $container->output_row('Post header', 'Optional MyCode placed before the imported body. Allowed placeholders: {title}, {source_url}, {feed_name}, {author}, {published_date}.', $form->generate_text_area('post_header', $values['post_header']));
     $container->output_row('Post footer', 'Optional MyCode placed after the imported body but before the separate source-attribution line. The same safe placeholders are available.', $form->generate_text_area('post_footer', $values['post_footer']));
@@ -691,6 +687,18 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         $form->generate_select_box('publication_mode', array('automatic' => 'Publish automatically', 'approval' => 'Require administrator approval'), $values['publication_mode']));
     $container->output_row('Pause publishing', 'Keep checking this feed and adding new entries to its queue, but do not create MyBB threads until publishing is resumed.', $form->generate_check_box('publishing_paused', 1, 'Keep collecting entries, but do not publish them yet', array('checked' => !empty($values['publishing_paused']))));
     $container->output_row('Feed enabled', 'Turn this off to stop this feed completely. Feed Publisher will not check it for new entries or publish its queued entries.', $form->generate_check_box('enabled', 1, 'Enable checking and publishing for this feed', array('checked' => !empty($values['enabled']))));
+    $container->end();
+
+    $container = new FormContainer('Optional AI cleanup', 'fp-collapsible fp-section-ai' . (!empty($values['ai_enabled']) ? ' fp-default-open' : ''));
+    $container->output_row('AI cleanup', 'Disabled by default. When enabled, each new entry title and cleaned body are sent to the configured provider before queueing. Provider failures keep the deterministic result.', $form->generate_check_box('ai_enabled', 1, 'Send entry content to an OpenAI-compatible provider', array('checked' => !empty($values['ai_enabled']))));
+    $container->output_row('AI handling', 'Replace uses validated output automatically. Review-only preserves deterministic content and holds the separate AI suggestion for administrator approval.', $form->generate_select_box('ai_mode', array('replace'=>'Replace after validation','review'=>'Review suggestion before publishing'), $values['ai_mode']));
+    $container->output_row('Endpoint', 'OpenAI-compatible chat-completions URL. HTTP is allowed for an administrator-configured local llama.cpp server; use HTTPS for remote providers.', $form->generate_text_box('ai_endpoint', $values['ai_endpoint'], array('maxlength' => 2048, 'placeholder' => 'http://server:8080/v1/chat/completions')));
+    $savedAiKey = !empty($values['id']) && !empty($values['ai_api_key']);
+    $container->output_row('API key', 'Optional for llama.cpp. Saved keys are masked and excluded from exports and logs. Leave blank while editing to keep the saved key.', $form->generate_password_box('ai_api_key', '', array('autocomplete' => 'new-password', 'placeholder' => $savedAiKey ? 'Saved - leave blank to keep' : 'Optional')));
+    $container->output_row('Model', 'The model or alias exposed by the provider.', $form->generate_text_box('ai_model', $values['ai_model'], array('maxlength' => 200)));
+    $container->output_row('Per-feed instructions', 'Optional cleanup rules, maximum 4,000 bytes. The source content and these instructions are sent to the provider.', $form->generate_text_area('ai_prompt', $values['ai_prompt']));
+    $container->output_row('Request limits', 'One request per entry with no automatic AI retry.', 'Timeout: ' . $form->generate_numeric_field('ai_timeout_seconds', (int) $values['ai_timeout_seconds'], array('min' => 3, 'max' => 60)) . ' &nbsp; Maximum output tokens: ' . $form->generate_numeric_field('ai_max_tokens', (int) $values['ai_max_tokens'], array('min' => 128, 'max' => 4096)) . ' &nbsp; Requests per run: ' . $form->generate_numeric_field('ai_max_per_run', (int) $values['ai_max_per_run'], array('min' => 1, 'max' => 10)));
+    $container->output_row('Provider compatibility', 'JSON mode asks compatible servers to constrain output. No-thinking prepends /no_think for reasoning models such as the tested llama.cpp Qwen model.', $form->generate_check_box('ai_json_mode', 1, 'Request JSON response mode', array('checked' => !empty($values['ai_json_mode']))) . '<br>' . $form->generate_check_box('ai_no_think', 1, 'Request no-thinking output', array('checked' => !empty($values['ai_no_think']))));
     $container->end();
     $form->output_submit_wrapper(array(
         $form->generate_submit_button($action === 'edit' ? 'Save feed' : 'Add feed', array('name' => 'save_feed')),

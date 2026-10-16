@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.10 - 2026-10-16
+
+- Move optional AI settings to the end of the add/edit feed form.
+- Add accessible, browser-persisted Show/Hide controls for Discord, content/filtering, post-output/cleanup, and AI sections while leaving core destination and scheduling fields open.
+
 ## 1.0.9 - 2026-10-16
 
 - Store bounded non-secret AI outcome, model, and message metadata with each queued entry.
