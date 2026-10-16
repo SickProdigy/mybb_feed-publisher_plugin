@@ -45,7 +45,7 @@ function feedpublisher_discover_feed($feed)
             'last_checked' => TIME_NOW,
             'last_success_at' => TIME_NOW,
             'fetch_failures' => 0,
-            'next_fetch_at' => 0,
+            'next_fetch_at' => feedpublisher_fulltext_next_retry_at((int) $feed['id']),
             'last_error' => '',
             'last_feed_item_count' => count($items),
         );
@@ -93,6 +93,55 @@ function feedpublisher_queue_retry_failed($feedId, $limit = 100)
         'last_error' => '',
     ), 'id IN (' . implode(',', $ids) . ") AND state='failed'");
     return $db->affected_rows();
+}
+
+function feedpublisher_feed_thread_ids($feedId)
+{
+    global $db;
+
+    $threadIds = array();
+    foreach (array('feedpublisher_items', 'feedpublisher_queue') as $table) {
+        $query = $db->simple_select($table, 'tid', 'feed_id=' . (int) $feedId . ' AND tid>0');
+        while ($row = $db->fetch_array($query)) {
+            $threadIds[(int) $row['tid']] = (int) $row['tid'];
+        }
+    }
+    ksort($threadIds, SORT_NUMERIC);
+    return array_values($threadIds);
+}
+
+function feedpublisher_delete_feed_threads($feedId)
+{
+    global $db;
+
+    if (!function_exists('delete_thread')) {
+        require_once MYBB_ROOT . 'inc/functions.php';
+    }
+    if (!function_exists('delete_thread')) {
+        throw new RuntimeException('MyBB thread deletion is unavailable.');
+    }
+
+    $result = array('deleted' => 0, 'missing' => 0, 'failed' => 0);
+    foreach (feedpublisher_feed_thread_ids($feedId) as $tid) {
+        $exists = $db->fetch_field($db->simple_select('threads', 'tid', 'tid=' . $tid, array('limit' => 1)), 'tid');
+        $removed = !$exists;
+        if ($exists) {
+            try {
+                $removed = delete_thread($tid) !== false;
+            } catch (Throwable $exception) {
+                $removed = false;
+            }
+        }
+        if (!$removed) {
+            ++$result['failed'];
+            continue;
+        }
+
+        ++$result[$exists ? 'deleted' : 'missing'];
+        $db->update_query('feedpublisher_items', array('tid' => 0, 'pid' => 0), 'feed_id=' . (int) $feedId . ' AND tid=' . $tid);
+        $db->update_query('feedpublisher_queue', array('tid' => 0, 'pid' => 0), 'feed_id=' . (int) $feedId . ' AND tid=' . $tid);
+    }
+    return $result;
 }
 
 function feedpublisher_queue_resolve_uncertain($feed, $queueId, $resolution, $tid = 0, $pid = 0)

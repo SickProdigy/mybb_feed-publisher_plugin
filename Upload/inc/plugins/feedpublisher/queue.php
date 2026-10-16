@@ -310,6 +310,14 @@ function feedpublisher_queue_dispatch($feed, $publisher, $force = false)
             }
             feedpublisher_queue_complete($feed, $item, $publication['tid'], $publication['pid']);
             ++$result['published'];
+            if (function_exists('feedpublisher_webhook_enqueue')) {
+                try {
+                    feedpublisher_webhook_enqueue($feed, $item, $publication['tid']);
+                } catch (Throwable $webhookException) {
+                    feedpublisher_log_event((int) $feed['id'], 'webhook', 'error',
+                        'The MyBB thread was published, but its Discord delivery could not be queued: ' . feedpublisher_safe_log_text($webhookException->getMessage()));
+                }
+            }
         } catch (Throwable $exception) {
             $result['errors'][] = $exception->getMessage();
             if (is_array($publication) && !empty($publication['tid']) && !empty($publication['pid'])) {

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.6 - 2026-10-16
+
+- Add a triple-confirmed per-feed operation that pauses publishing and deletes
+  every MyBB thread recorded for that feed while preserving duplicate history.
+- Resolve relative links and images in feed HTML, strip hidden executable
+  content, space body images, and warn about suspicious Preview/audit output.
+- Track full-article retries per feed entry so one failing article does not
+  consume another entry's retry allowance or block the rest of discovery.
+- Add optional per-feed Discord notifications with masked webhook credentials,
+  mention-safe templates, confirmed delivery, and an independent retry queue.
+
 ## 1.0.5 - 2026-09-20
 
 - Honor MyBB's effective byte limit for generated posts, including the forum

@@ -287,27 +287,117 @@ function feedpublisher_fulltext_item_known($feed, $item, $identity)
         || (bool) $db->fetch_field($db->simple_select('feedpublisher_items', 'id', $condition, array('limit' => 1)), 'id');
 }
 
-function feedpublisher_fulltext_failure($feed, &$entry, $message)
+function feedpublisher_fulltext_retry_state($feedId, $itemKey)
+{
+    global $db;
+    if ((int) $feedId <= 0 || $itemKey === '') return false;
+    return $db->fetch_array($db->simple_select(
+        'feedpublisher_fulltext_retries',
+        '*',
+        'feed_id=' . (int) $feedId . " AND item_key='" . $db->escape_string($itemKey) . "'",
+        array('limit' => 1)
+    ));
+}
+
+function feedpublisher_fulltext_retry_clear($feedId, $itemKey)
+{
+    global $db;
+    if ((int) $feedId > 0 && $itemKey !== '') {
+        $db->delete_query('feedpublisher_fulltext_retries',
+            'feed_id=' . (int) $feedId . " AND item_key='" . $db->escape_string($itemKey) . "'");
+    }
+}
+
+function feedpublisher_fulltext_retry_record($feedId, $itemKey, $message)
+{
+    global $db;
+    $existing = feedpublisher_fulltext_retry_state($feedId, $itemKey);
+    $attempts = $existing ? (int) $existing['attempts'] + 1 : 1;
+    $delay = min(21600, 300 * (2 ** min(6, $attempts - 1)));
+    $record = array(
+        'attempts' => $attempts,
+        'next_attempt_at' => TIME_NOW + $delay,
+        'last_attempt_at' => TIME_NOW,
+        'last_error' => $db->escape_string(feedpublisher_safe_log_text($message)),
+    );
+    if ($existing) {
+        $db->update_query('feedpublisher_fulltext_retries', $record, 'id=' . (int) $existing['id']);
+    } else {
+        $record['feed_id'] = (int) $feedId;
+        $record['item_key'] = $db->escape_string($itemKey);
+        $db->insert_query('feedpublisher_fulltext_retries', $record);
+    }
+    return $record;
+}
+
+function feedpublisher_fulltext_next_retry_at($feedId)
+{
+    global $db;
+    if ((int) $feedId <= 0) return 0;
+    return (int) $db->fetch_field($db->simple_select(
+        'feedpublisher_fulltext_retries',
+        'MIN(next_attempt_at) AS next_retry',
+        'feed_id=' . (int) $feedId . ' AND next_attempt_at>0'
+    ), 'next_retry');
+}
+
+function feedpublisher_fulltext_retry_prune($feedId, $seenItemKeys)
+{
+    global $db;
+    if ((int) $feedId <= 0) return 0;
+    $seen = array_fill_keys($seenItemKeys, true);
+    $removed = 0;
+    $query = $db->simple_select('feedpublisher_fulltext_retries', 'item_key', 'feed_id=' . (int) $feedId);
+    while ($row = $db->fetch_array($query)) {
+        if (!isset($seen[$row['item_key']])) {
+            $db->delete_query('feedpublisher_fulltext_retries',
+                'feed_id=' . (int) $feedId . " AND item_key='" . $db->escape_string($row['item_key']) . "'");
+            ++$removed;
+        }
+    }
+    return $removed;
+}
+
+function feedpublisher_fulltext_failure($feed, &$entry, $message, $identity = array())
 {
     $fallback = isset($feed['fulltext_fallback']) ? $feed['fulltext_fallback'] : 'feed';
+    $feedId = isset($feed['id']) ? (int) $feed['id'] : 0;
+    $itemKey = isset($identity['key']) ? $identity['key'] : '';
     $urlMetadata = isset($entry['item']['_fulltext']['url']) ? $entry['item']['_fulltext']['url'] : null;
     $entry['item']['_fulltext'] = array('source' => 'feed', 'status' => 'fallback', 'message' => feedpublisher_safe_log_text($message));
     if ($urlMetadata !== null) $entry['item']['_fulltext']['url'] = $urlMetadata;
     if ($fallback === 'feed' && trim(strip_tags((string) $entry['item']['content'])) === '') {
-        throw new FeedPublisherException('fulltext', $message . ' The original feed content was also empty, so no fallback post was queued.');
+        $entry['state'] = 'rejected';
+        $entry['item']['_disposition'] = 'rejected';
+        $entry['item']['_fulltext']['status'] = 'rejected';
+        $entry['item']['_fulltext']['message'] = feedpublisher_safe_log_text($message . ' The original feed content was also empty, so the entry was rejected.');
+        feedpublisher_fulltext_retry_clear($feedId, $itemKey);
     } elseif ($fallback === 'skip') {
         $entry['state'] = 'skipped';
         $entry['item']['_disposition'] = 'skipped';
-    } elseif ($fallback === 'retry') {
-        throw new FeedPublisherException('fulltext', $message);
-    } elseif ($fallback === 'retry_skip') {
-        $attempts = isset($feed['fetch_failures']) ? (int) $feed['fetch_failures'] : 0;
-        if ($attempts < 3) {
-            throw new FeedPublisherException('fulltext', $message . ' Full-article retry ' . ($attempts + 1) . ' of 3 scheduled before marking the entry seen.');
+        feedpublisher_fulltext_retry_clear($feedId, $itemKey);
+    } elseif ($fallback === 'retry' || $fallback === 'retry_skip') {
+        $retry = $feedId > 0
+            ? feedpublisher_fulltext_retry_record($feedId, $itemKey, $message)
+            : array('attempts' => 1, 'next_attempt_at' => TIME_NOW + 300);
+        if ($fallback === 'retry_skip' && (int) $retry['attempts'] >= 4) {
+            $entry['state'] = 'skipped';
+            $entry['item']['_disposition'] = 'skipped';
+            $entry['item']['_fulltext']['status'] = 'retry-exhausted';
+            $entry['item']['_fulltext']['message'] = feedpublisher_safe_log_text($message . ' The initial attempt and three retries failed; entry marked seen without publishing.');
+            feedpublisher_fulltext_retry_clear($feedId, $itemKey);
+        } else {
+            $entry['state'] = 'deferred_fulltext';
+            $entry['item']['_fulltext']['status'] = 'retry-scheduled';
+            $entry['item']['_fulltext']['retry_attempts'] = (int) $retry['attempts'];
+            $entry['item']['_fulltext']['next_attempt_at'] = (int) $retry['next_attempt_at'];
+            $description = $fallback === 'retry_skip'
+                ? 'Scheduled retry ' . (int) $retry['attempts'] . ' of 3 after the initial attempt.'
+                : 'Scheduled another full-article retry.';
+            $entry['item']['_fulltext']['message'] = feedpublisher_safe_log_text($message . ' ' . $description);
         }
-        $entry['state'] = 'skipped';
-        $entry['item']['_disposition'] = 'skipped';
-        $entry['item']['_fulltext']['message'] = feedpublisher_safe_log_text($message . ' Retry limit reached; entry marked seen without publishing.');
+    } else {
+        feedpublisher_fulltext_retry_clear($feedId, $itemKey);
     }
 }
 
@@ -315,6 +405,7 @@ function feedpublisher_fulltext_prepare_plan($feed, $plan)
 {
     $mode = isset($feed['fulltext_mode']) ? $feed['fulltext_mode'] : 'disabled';
     if ($mode === 'disabled') {
+        if (!empty($feed['id'])) feedpublisher_fulltext_retry_prune((int) $feed['id'], array());
         foreach ($plan as &$entry) $entry['item']['_fulltext'] = array('source' => 'feed', 'status' => 'disabled', 'message' => 'Full-text retrieval is disabled.');
         unset($entry);
         return $plan;
@@ -322,20 +413,35 @@ function feedpublisher_fulltext_prepare_plan($feed, $plan)
     $threshold = max(100, min(5000, (int) (isset($feed['fulltext_summary_chars']) ? $feed['fulltext_summary_chars'] : 600)));
     $limit = max(1, min(10, (int) (isset($feed['fulltext_max_per_run']) ? $feed['fulltext_max_per_run'] : 3)));
     $attempted = 0;
+    $seenItemKeys = array();
     foreach ($plan as &$entry) {
         $item =& $entry['item'];
         $identity = feedpublisher_derive_item_identity($feed, $item);
+        if ($identity['key'] !== '') $seenItemKeys[] = $identity['key'];
         $item['_identity_override'] = $identity;
         $plainLength = my_strlen(trim(preg_replace('/\s+/u', ' ', strip_tags((string) $item['content']))));
         $partialFeedContent = feedpublisher_feed_content_looks_partial((string) $item['content'], $threshold);
         $needs = $entry['state'] === 'queued' && ($mode === 'always' || $partialFeedContent);
         if (!$needs) {
+            feedpublisher_fulltext_retry_clear(isset($feed['id']) ? (int) $feed['id'] : 0, $identity['key']);
             $item['_fulltext'] = array('source' => 'feed', 'status' => 'not-needed', 'message' => 'Feed content retained (' . $plainLength . ' text characters).');
             unset($item);
             continue;
         }
         if (feedpublisher_fulltext_item_known($feed, $item, $identity)) {
+            feedpublisher_fulltext_retry_clear(isset($feed['id']) ? (int) $feed['id'] : 0, $identity['key']);
             $item['_fulltext'] = array('source' => 'feed', 'status' => 'known', 'message' => 'Entry already exists; linked article was not fetched.');
+            unset($item);
+            continue;
+        }
+        $retry = feedpublisher_fulltext_retry_state(isset($feed['id']) ? (int) $feed['id'] : 0, $identity['key']);
+        if ($retry && (int) $retry['next_attempt_at'] > TIME_NOW) {
+            $entry['state'] = 'deferred_fulltext';
+            $item['_fulltext'] = array(
+                'source' => 'feed', 'status' => 'retry-wait', 'retry_attempts' => (int) $retry['attempts'],
+                'next_attempt_at' => (int) $retry['next_attempt_at'],
+                'message' => 'Waiting for the saved per-entry full-article retry time.',
+            );
             unset($item);
             continue;
         }
@@ -356,14 +462,16 @@ function feedpublisher_fulltext_prepare_plan($feed, $plan)
             $extract = array();
             $content = feedpublisher_fulltext_extract($html, $fetchUrl, $extract);
             $item['content'] = $content;
+            feedpublisher_fulltext_retry_clear(isset($feed['id']) ? (int) $feed['id'] : 0, $identity['key']);
             if (!empty($rewrite['rewritten'])) $item['source_url'] = $fetchUrl;
             $item['_fulltext'] = array('source' => 'fulltext', 'status' => 'extracted', 'message' => 'Extracted linked article.',
                 'url' => $rewrite, 'fetch' => $fetch, 'extract' => $extract, 'feed_characters' => $plainLength);
         } catch (Throwable $exception) {
-            feedpublisher_fulltext_failure($feed, $entry, $exception->getMessage());
+            feedpublisher_fulltext_failure($feed, $entry, $exception->getMessage(), $identity);
         }
         unset($item);
     }
     unset($entry);
+    if (!empty($feed['id'])) feedpublisher_fulltext_retry_prune((int) $feed['id'], $seenItemKeys);
     return $plan;
 }

@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://github.com/sickprodigy/mybb_feed-publisher_plugin',
         'author' => 'SickProdigy',
         'authorsite' => 'https://www.sickgaming.net',
-        'version' => '1.0.5',
+        'version' => '1.0.6',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -76,6 +76,9 @@ function feedpublisher_install()
             `fulltext_url_replacement` varchar(2048) NOT NULL DEFAULT '',
             `fulltext_summary_chars` smallint unsigned NOT NULL DEFAULT 600,
             `fulltext_max_per_run` tinyint unsigned NOT NULL DEFAULT 3,
+            `discord_enabled` tinyint(1) NOT NULL DEFAULT 0,
+            `discord_webhook_url` varchar(512) NOT NULL DEFAULT '',
+            `discord_message_template` varchar(2000) NOT NULL DEFAULT '{title}\n{thread_url}',
             `enabled` tinyint(1) NOT NULL DEFAULT 0,
             `interval_minutes` smallint unsigned NOT NULL DEFAULT 240,
             `publish_interval_minutes` smallint unsigned NOT NULL DEFAULT 360,
@@ -121,6 +124,7 @@ function feedpublisher_install()
         ) ENGINE=MyISAM{$collation}");
     }
 
+    feedpublisher_install_fulltext_retries_table($collation);
     feedpublisher_install_logs_table($collation);
 
     feedpublisher_upgrade_schema();
@@ -162,6 +166,9 @@ function feedpublisher_upgrade_schema()
         'fulltext_url_replacement' => "varchar(2048) NOT NULL DEFAULT '' AFTER `fulltext_url_regex`",
         'fulltext_summary_chars' => "smallint unsigned NOT NULL DEFAULT 600 AFTER `fulltext_url_replacement`",
         'fulltext_max_per_run' => "tinyint unsigned NOT NULL DEFAULT 3 AFTER `fulltext_summary_chars`",
+        'discord_enabled' => "tinyint(1) NOT NULL DEFAULT 0 AFTER `fulltext_max_per_run`",
+        'discord_webhook_url' => "varchar(512) NOT NULL DEFAULT '' AFTER `discord_enabled`",
+        'discord_message_template' => "varchar(2000) NOT NULL DEFAULT '{title}\\n{thread_url}' AFTER `discord_webhook_url`",
         'interval_minutes' => "smallint unsigned NOT NULL DEFAULT 240 AFTER `enabled`",
         'publish_interval_minutes' => "smallint unsigned NOT NULL DEFAULT 360 AFTER `interval_minutes`",
         'max_posts_per_run' => "smallint unsigned NOT NULL DEFAULT 1 AFTER `publish_interval_minutes`",
@@ -229,7 +236,56 @@ function feedpublisher_upgrade_schema()
             KEY `state_available` (`state`, `available_at`)
         ) ENGINE=MyISAM{$collation}");
     }
+    feedpublisher_install_fulltext_retries_table($db->build_create_table_collation());
+    feedpublisher_install_webhook_queue_table($db->build_create_table_collation());
     feedpublisher_install_logs_table($db->build_create_table_collation());
+}
+
+function feedpublisher_install_webhook_queue_table($collation)
+{
+    global $db;
+    if (!$db->table_exists('feedpublisher_webhook_queue')) {
+        $db->write_query("CREATE TABLE `" . TABLE_PREFIX . "feedpublisher_webhook_queue` (
+            `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+            `feed_id` int unsigned NOT NULL,
+            `item_key` char(64) NOT NULL,
+            `tid` int unsigned NOT NULL,
+            `title` varchar(255) NOT NULL DEFAULT '',
+            `source_url` varchar(2048) NOT NULL DEFAULT '',
+            `state` varchar(16) NOT NULL DEFAULT 'queued',
+            `attempts` smallint unsigned NOT NULL DEFAULT 0,
+            `next_attempt_at` int unsigned NOT NULL DEFAULT 0,
+            `last_attempt_at` int unsigned NOT NULL DEFAULT 0,
+            `last_error` varchar(1000) NOT NULL DEFAULT '',
+            `delivered_at` int unsigned NOT NULL DEFAULT 0,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `feed_item` (`feed_id`, `item_key`),
+            KEY `feed_state_due` (`feed_id`, `state`, `next_attempt_at`)
+        ) ENGINE=MyISAM{$collation}");
+    }
+}
+
+function feedpublisher_install_fulltext_retries_table($collation)
+{
+    global $db;
+    if (!$db->table_exists('feedpublisher_fulltext_retries')) {
+        $db->write_query("CREATE TABLE `" . TABLE_PREFIX . "feedpublisher_fulltext_retries` (
+            `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+            `feed_id` int unsigned NOT NULL,
+            `item_key` char(64) NOT NULL,
+            `attempts` smallint unsigned NOT NULL DEFAULT 0,
+            `next_attempt_at` int unsigned NOT NULL DEFAULT 0,
+            `last_attempt_at` int unsigned NOT NULL DEFAULT 0,
+            `claimed_at` int unsigned NOT NULL DEFAULT 0,
+            `last_error` varchar(1000) NOT NULL DEFAULT '',
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `feed_item` (`feed_id`, `item_key`),
+            KEY `feed_next_attempt` (`feed_id`, `next_attempt_at`)
+        ) ENGINE=MyISAM{$collation}");
+    }
+    if ($db->table_exists('feedpublisher_webhook_queue') && !$db->field_exists('claimed_at', 'feedpublisher_webhook_queue')) {
+        $db->add_column('feedpublisher_webhook_queue', 'claimed_at', "int unsigned NOT NULL DEFAULT 0 AFTER `last_attempt_at`");
+    }
 }
 
 function feedpublisher_install_logs_table($collation)
@@ -255,6 +311,8 @@ function feedpublisher_uninstall()
     global $db;
 
     $db->drop_table('feedpublisher_queue');
+    $db->drop_table('feedpublisher_fulltext_retries');
+    $db->drop_table('feedpublisher_webhook_queue');
     $db->drop_table('feedpublisher_logs');
     $db->drop_table('feedpublisher_items');
     $db->drop_table('feedpublisher_feeds');

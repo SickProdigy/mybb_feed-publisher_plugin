@@ -94,6 +94,9 @@ foreach ($urls as $url) {
             if (preg_match('/(?:&#x20;|all synced posts|more official news|cookie preferences|accept all cookies)/i', $post['body'], $match)) {
                 $entryWarnings[] = 'Rendered post contains suspicious page furniture: ' . $match[0] . '.';
             }
+            foreach (feedpublisher_suspicious_output_warnings($post['body']) as $warning) {
+                $entryWarnings[] = $warning . '.';
+            }
             $examples[] = ($index + 1) . '. ' . $post['title'] . ' [' . my_strlen($rendered) . ' chars]';
         } catch (Throwable $exception) {
             $entryWarnings[] = 'Preparation failed: ' . feedpublisher_safe_log_text($exception->getMessage());

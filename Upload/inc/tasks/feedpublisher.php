@@ -16,6 +16,7 @@ function task_feedpublisher($task)
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/core.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/queue.php';
     require_once MYBB_ROOT . 'inc/plugins/feedpublisher/operations.php';
+    require_once MYBB_ROOT . 'inc/plugins/feedpublisher/webhook.php';
     $publisherFile = MYBB_ROOT . 'inc/plugins/feedpublisher/publisher.php';
     if (is_file($publisherFile)) {
         require_once $publisherFile;
@@ -28,7 +29,7 @@ function task_feedpublisher($task)
         ++$totals['feeds'];
         feedpublisher_retention_cleanup($feed, 100);
         $discoveryInterval = max(5, (int) $feed['interval_minutes']) * 60;
-        $discoveryDue = (int) $feed['fetch_failures'] > 0
+        $discoveryDue = (int) $feed['next_fetch_at'] > 0
             ? (int) $feed['next_fetch_at'] <= TIME_NOW
             : (int) $feed['last_checked'] <= TIME_NOW - $discoveryInterval;
 
@@ -55,11 +56,16 @@ function task_feedpublisher($task)
                 $errors[] = feedpublisher_safe_log_text($feed['name']) . ' publication: ' . feedpublisher_safe_log_text($error);
             }
         }
+        $webhooks = feedpublisher_webhook_dispatch($feed, 5);
+        $totals['webhook_delivered'] = isset($totals['webhook_delivered']) ? $totals['webhook_delivered'] + $webhooks['delivered'] : $webhooks['delivered'];
+        $totals['webhook_failed'] = isset($totals['webhook_failed']) ? $totals['webhook_failed'] + $webhooks['failed'] : $webhooks['failed'];
     }
 
     $message = 'Checked ' . $totals['feeds'] . ' enabled feeds; staged ' . $totals['staged']
         . ', initially skipped ' . $totals['skipped'] . ', rejected ' . $totals['rejected'] . ', already known ' . $totals['existing'] . ', queue-full skips ' . $totals['full'] . ', full-text deferred ' . $totals['deferred']
         . ', published ' . $totals['published'] . ', publication failures ' . $totals['failed'] . '.';
+    $message .= ' Discord delivered ' . (isset($totals['webhook_delivered']) ? $totals['webhook_delivered'] : 0)
+        . ', Discord delivery failures ' . (isset($totals['webhook_failed']) ? $totals['webhook_failed'] : 0) . '.';
     if ($errors) {
         $message .= ' Errors: ' . implode('; ', $errors);
     }

@@ -211,9 +211,34 @@ Article extraction:
 - Scores article/main containers and requires substantial content
 - Resolves relative links before normal cleanup and MyCode conversion
 
-Failure can retain the feed content, mark the entry seen, retry a few times and
-then mark seen, or fail discovery for retry. A configurable limit of 1-10 article
-requests per run defers overflow without losing entries.
+Failure can publish the original feed content immediately, mark the entry seen,
+retry that entry three times after its initial failed attempt and then mark it
+seen, or keep retrying that entry indefinitely. Retry counts and backoff are
+stored independently for each entry, so one unavailable article neither uses
+another article's allowance nor prevents later entries from being processed.
+Successful feed checks do not erase pending entry retries. A configurable limit
+of 1-10 article requests per run defers overflow without losing entries.
+
+## Discord Notifications
+
+Each feed can optionally queue a Discord notification after its MyBB thread is
+successfully published. Create an incoming webhook in Discord, paste its
+`https://discord.com/api/webhooks/...` URL into the feed form, choose a message
+template, and enable delivery. Templates support `{title}`, `{thread_url}`,
+`{source_url}`, and `{feed_name}`.
+
+Discord delivery is separate from publication. A timeout, rate limit,
+invalidated webhook, or Discord outage cannot undo or republish a MyBB thread.
+Deliveries retry with bounded exponential backoff and become failed after five
+attempts; Operations can return failed deliveries to the queue. Stale
+in-progress claims recover automatically after 15 minutes. The Operations page
+also has a confirmed test-message action for validating a saved webhook.
+
+Webhook URLs are credentials: the saved value is never displayed, exported,
+included in support reports, or written to logs. Only Discord's HTTPS webhook
+host and generated webhook path are accepted. Messages request confirmed
+delivery and disable all allowed mentions, so source text cannot ping users,
+roles, or everyone.
 
 Maintainers can audit every unique endpoint in the local recommendation list
 with `php tests/audit_feeds.php`. Add `--fulltext` to attempt one linked article
@@ -251,7 +276,8 @@ identities remain recorded for duplicate detection.
 
 The **Operations** action for a saved feed can run discovery, publish the next
 bounded batch, retry failures, pause or resume publishing, reset fetch backoff,
-clear eligible queue rows, and resolve uncertain publication outcomes.
+clear eligible queue rows, resolve uncertain publication outcomes, and retry
+failed Discord deliveries.
 State-changing actions require confirmation and are recorded in MyBB's
 administrator log.
 
@@ -314,6 +340,9 @@ six hours.
   incorrectly labeled feeds.
 - Configuration actions use MyBB permissions, post-key protection, confirmation,
   and administrator logging where applicable.
+- Discord webhook credentials are masked, excluded from exports and diagnostics,
+  restricted to Discord HTTPS endpoints, sent without proxy inheritance, and
+  never included in delivery errors.
 
 ## Troubleshooting
 

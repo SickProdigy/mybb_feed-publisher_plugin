@@ -923,6 +923,21 @@ function feedpublisher_cleanup_html($html, $feed, $sourceUrl = '')
     libxml_clear_errors();
     libxml_use_internal_errors($previous);
     $xpath = new DOMXPath($document);
+    $roots = $xpath->query("//*[@id='feedpublisher-root']");
+    $root = $roots && $roots->length ? $roots->item(0) : null;
+
+    feedpublisher_cleanup_remove_nodes($xpath, '//script|//style|//template|//noscript|//iframe|//object|//embed|//form|//svg|//canvas|//base|//link|//meta');
+    if ($root) {
+        $base = feedpublisher_safe_content_url($sourceUrl) ? trim((string) $sourceUrl) : '';
+        foreach ($xpath->query('.//*[@href]|.//*[@src]', $root) as $node) {
+            foreach (array('href', 'src') as $attribute) {
+                if (!$node->hasAttribute($attribute)) continue;
+                $resolved = feedpublisher_resolve_relative_content_url($node->getAttribute($attribute), $base);
+                if ($resolved === '') $node->removeAttribute($attribute);
+                else $node->setAttribute($attribute, $resolved);
+            }
+        }
+    }
 
     $selectors = array_slice(feedpublisher_cleanup_rule_lines(isset($feed['strip_selectors']) ? $feed['strip_selectors'] : ''), 0, 50);
     if (!empty($feed['remove_bylines'])) {
@@ -962,8 +977,6 @@ function feedpublisher_cleanup_html($html, $feed, $sourceUrl = '')
         }
     }
 
-    $roots = $xpath->query("//*[@id='feedpublisher-root']");
-    $root = $roots && $roots->length ? $roots->item(0) : null;
     $cleaned = '';
     if ($root) {
         foreach ($root->childNodes as $child) {
@@ -1027,6 +1040,22 @@ function feedpublisher_html_to_mycode($html)
     return trim($output);
 }
 
+function feedpublisher_suspicious_output_warnings($output)
+{
+    $output = (string) $output;
+    $warnings = array();
+    if (preg_match('~https?://thread-[^\s\]]+~i', $output, $match)) {
+        $warnings[] = 'Possible broken relative URL: ' . $match[0];
+    }
+    if (preg_match('/(?:lightbox|fancybox)[^\r\n]{0,80}(?:config|gallery|selector|\{|\[)/i', $output, $match)) {
+        $warnings[] = 'Possible leaked lightbox configuration: ' . trim($match[0]);
+    }
+    if (preg_match('~</?(?:script|style|template)\b|javascript\s*:~i', $output, $match)) {
+        $warnings[] = 'Possible embedded script or hidden markup: ' . trim($match[0]);
+    }
+    return $warnings;
+}
+
 function feedpublisher_node_to_mycode(DOMNode $node)
 {
     if ($node->nodeType === XML_TEXT_NODE) {
@@ -1064,7 +1093,7 @@ function feedpublisher_node_to_mycode(DOMNode $node)
     if ($tag === 'img') {
         $url = trim($node->getAttribute('src'));
         $url = str_replace(array('[', ']'), array('%5B', '%5D'), $url);
-        return feedpublisher_safe_content_url($url) ? '[img]' . $url . '[/img]' : '';
+        return feedpublisher_safe_content_url($url) ? "\n\n[img]" . $url . "[/img]\n\n" : '';
     }
 
     return $content;

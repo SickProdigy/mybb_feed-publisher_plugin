@@ -26,12 +26,20 @@ if (!function_exists('build_prefixes')) {
 if (!function_exists('is_member')) {
     function is_member($groups, $user = false) { return array(1); }
 }
+if (!function_exists('delete_thread')) {
+    function delete_thread($tid) {
+        $GLOBALS['feedpublisher_test_deleted_threads'][] = (int) $tid;
+        return !in_array((int) $tid, $GLOBALS['feedpublisher_test_failed_threads'], true);
+    }
+}
 
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/core.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/fulltext.php';
 require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/portability.php';
+require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/operations.php';
+require_once __DIR__ . '/../Upload/inc/plugins/feedpublisher/webhook.php';
 
 class FeedPublisherTestSuite
 {
@@ -193,7 +201,243 @@ class FeedPublisherQueueDb
     }
 }
 
+class FeedPublisherThreadDb extends FeedPublisherQueueDb
+{
+    public $threads = array();
+
+    public function simple_select($table, $fields = '*', $condition = '', $options = array())
+    {
+        if ($table === 'threads') {
+            preg_match('/tid=(\d+)/', $condition, $match);
+            $tid = isset($match[1]) ? (int) $match[1] : 0;
+            return new FeedPublisherArrayResult(isset($this->threads[$tid]) ? array(array('tid' => $tid)) : array());
+        }
+        if ($table === 'feedpublisher_items' || $table === 'feedpublisher_queue') {
+            $rows = array_values($table === 'feedpublisher_items' ? $this->items : $this->queue);
+            preg_match('/feed_id=(\d+)/', $condition, $feedMatch);
+            preg_match('/tid=(\d+)/', $condition, $tidMatch);
+            $rows = array_values(array_filter($rows, function ($row) use ($condition, $feedMatch, $tidMatch) {
+                if ($feedMatch && (int) $row['feed_id'] !== (int) $feedMatch[1]) { return false; }
+                if (strpos($condition, 'tid>0') !== false && empty($row['tid'])) { return false; }
+                if ($tidMatch && (int) $row['tid'] !== (int) $tidMatch[1]) { return false; }
+                return true;
+            }));
+            return new FeedPublisherArrayResult($rows);
+        }
+        return parent::simple_select($table, $fields, $condition, $options);
+    }
+
+    public function update_query($table, $data, $condition = '')
+    {
+        if ($table === 'feedpublisher_items' || $table === 'feedpublisher_queue') {
+            if ($table === 'feedpublisher_items') {
+                $rows =& $this->items;
+            } else {
+                $rows =& $this->queue;
+            }
+            preg_match('/feed_id=(\d+)/', $condition, $feedMatch);
+            preg_match('/tid=(\d+)/', $condition, $tidMatch);
+            foreach ($rows as $key => $row) {
+                if ((int) $row['feed_id'] === (int) $feedMatch[1] && (int) $row['tid'] === (int) $tidMatch[1]) {
+                    $rows[$key] = array_merge($row, $data);
+                }
+            }
+            return;
+        }
+        parent::update_query($table, $data, $condition);
+    }
+}
+
+class FeedPublisherRetryDb extends FeedPublisherQueueDb
+{
+    public $retries = array();
+    private $nextRetryId = 1;
+
+    public function simple_select($table, $fields = '*', $condition = '', $options = array())
+    {
+        if ($table !== 'feedpublisher_fulltext_retries') return parent::simple_select($table, $fields, $condition, $options);
+        preg_match('/feed_id=(\d+)/', $condition, $feedMatch);
+        preg_match("/item_key='([^']+)'/", $condition, $keyMatch);
+        $rows = array_values(array_filter($this->retries, function ($row) use ($feedMatch, $keyMatch) {
+            return (!$feedMatch || (int) $row['feed_id'] === (int) $feedMatch[1])
+                && (!$keyMatch || $row['item_key'] === stripslashes($keyMatch[1]));
+        }));
+        if (strpos($fields, 'MIN(next_attempt_at)') !== false) {
+            $values = array_map(function ($row) { return (int) $row['next_attempt_at']; }, $rows);
+            return new FeedPublisherArrayResult(array(array('next_retry' => $values ? min($values) : 0)));
+        }
+        return new FeedPublisherArrayResult($rows);
+    }
+
+    public function insert_query($table, $record)
+    {
+        if ($table === 'feedpublisher_fulltext_retries') {
+            $record['id'] = $this->nextRetryId++;
+            $this->retries[$record['feed_id'] . ':' . $record['item_key']] = $record;
+        }
+    }
+
+    public function update_query($table, $data, $condition = '')
+    {
+        if ($table !== 'feedpublisher_fulltext_retries') return parent::update_query($table, $data, $condition);
+        preg_match('/id=(\d+)/', $condition, $match);
+        foreach ($this->retries as $key => $row) {
+            if ((int) $row['id'] === (int) $match[1]) $this->retries[$key] = array_merge($row, $data);
+        }
+    }
+
+    public function delete_query($table, $condition = '')
+    {
+        if ($table !== 'feedpublisher_fulltext_retries') return parent::delete_query($table, $condition);
+        preg_match('/feed_id=(\d+)/', $condition, $feedMatch);
+        preg_match("/item_key='([^']+)'/", $condition, $keyMatch);
+        foreach ($this->retries as $key => $row) {
+            if ((!$feedMatch || (int) $row['feed_id'] === (int) $feedMatch[1])
+                && (!$keyMatch || $row['item_key'] === stripslashes($keyMatch[1]))) unset($this->retries[$key]);
+        }
+    }
+}
+
+class FeedPublisherWebhookDb extends FeedPublisherQueueDb
+{
+    public $deliveries = array();
+    private $webhookAffected = 0;
+
+    public function affected_rows() { return $this->webhookAffected; }
+
+    public function simple_select($table, $fields = '*', $condition = '', $options = array())
+    {
+        if ($table !== 'feedpublisher_webhook_queue') return parent::simple_select($table, $fields, $condition, $options);
+        preg_match('/feed_id=(\d+)/', $condition, $feedMatch);
+        preg_match("/state='([^']+)'/", $condition, $stateMatch);
+        $rows = array_values(array_filter($this->deliveries, function ($row) use ($condition, $feedMatch, $stateMatch) {
+            if ($feedMatch && (int) $row['feed_id'] !== (int) $feedMatch[1]) return false;
+            if ($stateMatch && $row['state'] !== $stateMatch[1]) return false;
+            if (strpos($condition, 'next_attempt_at<=') !== false && (int) $row['next_attempt_at'] > TIME_NOW) return false;
+            return true;
+        }));
+        if (strpos($fields, 'COUNT(') !== false) return new FeedPublisherArrayResult(array(array('total' => count($rows))));
+        if (isset($options['limit'])) $rows = array_slice($rows, 0, (int) $options['limit']);
+        return new FeedPublisherArrayResult($rows);
+    }
+
+    public function update_query($table, $data, $condition = '')
+    {
+        if ($table !== 'feedpublisher_webhook_queue') return parent::update_query($table, $data, $condition);
+        $this->webhookAffected = 0;
+        preg_match('/id=(\d+)/', $condition, $idMatch);
+        preg_match("/state='([^']+)'/", $condition, $stateMatch);
+        foreach ($this->deliveries as $key => $row) {
+            if ($idMatch && (int) $row['id'] !== (int) $idMatch[1]) continue;
+            if ($stateMatch && $row['state'] !== $stateMatch[1]) continue;
+            $this->deliveries[$key] = array_merge($row, $data);
+            ++$this->webhookAffected;
+        }
+    }
+
+    public function delete_query($table, $condition = '')
+    {
+        if ($table !== 'feedpublisher_webhook_queue') return parent::delete_query($table, $condition);
+        $this->webhookAffected = 0;
+        foreach ($this->deliveries as $key => $row) {
+            if (strpos($condition, "state='delivered'") !== false && $row['state'] !== 'delivered') continue;
+            if (preg_match('/delivered_at<(\d+)/', $condition, $match) && (int) $row['delivered_at'] >= (int) $match[1]) continue;
+            unset($this->deliveries[$key]);
+            ++$this->webhookAffected;
+        }
+    }
+
+    public function insert_query($table, $record) {}
+}
+
 $suite = new FeedPublisherTestSuite;
+
+$suite->test('feed thread deletion deduplicates IDs and preserves published history', function ($t) {
+    global $db;
+    $db = new FeedPublisherThreadDb;
+    $db->threads = array(11 => true, 22 => true);
+    $db->items = array(
+        array('feed_id' => 7, 'item_key' => 'a', 'tid' => 11, 'pid' => 101, 'imported_at' => TIME_NOW),
+        array('feed_id' => 7, 'item_key' => 'b', 'tid' => 22, 'pid' => 102, 'imported_at' => TIME_NOW),
+        array('feed_id' => 7, 'item_key' => 'c', 'tid' => 33, 'pid' => 103, 'imported_at' => TIME_NOW),
+        array('feed_id' => 8, 'item_key' => 'other', 'tid' => 44, 'pid' => 104, 'imported_at' => TIME_NOW),
+    );
+    $db->queue = array(
+        array('id' => 1, 'feed_id' => 7, 'tid' => 11, 'pid' => 101),
+        array('id' => 2, 'feed_id' => 7, 'tid' => 33, 'pid' => 103),
+    );
+    $GLOBALS['feedpublisher_test_deleted_threads'] = array();
+    $GLOBALS['feedpublisher_test_failed_threads'] = array(22);
+
+    $t->assertSame(array(11, 22, 33), feedpublisher_feed_thread_ids(7));
+    $result = feedpublisher_delete_feed_threads(7);
+    $t->assertSame(array('deleted' => 1, 'missing' => 1, 'failed' => 1), $result);
+    $t->assertSame(array(11, 22), $GLOBALS['feedpublisher_test_deleted_threads']);
+    $t->assertSame(0, $db->items[0]['tid']);
+    $t->assertSame(22, $db->items[1]['tid']);
+    $t->assertSame(0, $db->items[2]['tid']);
+    $t->assertSame(44, $db->items[3]['tid']);
+    $t->assertSame('a', $db->items[0]['item_key']);
+});
+
+$suite->test('Discord webhook configuration is restricted and templates are bounded', function ($t) {
+    global $mybb;
+    $mybb = new stdClass;
+    $mybb->settings = array('bburl' => 'https://forum.example.com');
+    $valid = 'https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz_ABCDEF-123';
+    $t->assertSame(true, feedpublisher_discord_webhook_url_valid($valid));
+    $t->assertSame(false, feedpublisher_discord_webhook_url_valid('http://discord.com/api/webhooks/123/token'));
+    $t->assertSame(false, feedpublisher_discord_webhook_url_valid('https://evil.example/api/webhooks/123/abcdefghijklmnopqrstuvwxyz'));
+    $t->assertSame(false, feedpublisher_discord_webhook_url_valid($valid . '?wait=true'));
+    $t->assertSame(array(), feedpublisher_discord_template_errors("{title}\n{thread_url}"));
+    $t->assertSame(1, count(feedpublisher_discord_template_errors('{unknown}')));
+    $rendered = feedpublisher_discord_render(
+        array('name' => 'News', 'discord_message_template' => "{title}\n{thread_url}\n{source_url}"),
+        array('title' => 'Published title', 'tid' => 42, 'source_url' => 'https://source.example/story')
+    );
+    $t->assertContains('Published title', $rendered);
+    $t->assertContains('https://forum.example.com/showthread.php?tid=42', $rendered);
+    $t->assertTrue(my_strlen(feedpublisher_discord_render(
+        array('discord_message_template' => '{title}'),
+        array('title' => str_repeat('x', 2500), 'tid' => 1)
+    )) <= 2000);
+});
+
+$suite->test('Discord delivery succeeds or backs off without changing MyBB publication state', function ($t) {
+    global $db, $mybb;
+    $mybb = new stdClass;
+    $mybb->settings = array('bburl' => 'https://forum.example.com');
+    $url = 'https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz_ABCDEF-123';
+    $feed = array('id' => 7, 'name' => 'News', 'discord_enabled' => 1, 'discord_webhook_url' => $url,
+        'discord_message_template' => "{title}\n{thread_url}");
+    $base = array('feed_id' => 7, 'item_key' => 'one', 'tid' => 42, 'title' => 'Title',
+        'source_url' => 'https://source.example/story', 'state' => 'queued', 'attempts' => 0,
+        'next_attempt_at' => TIME_NOW, 'last_attempt_at' => 0, 'last_error' => '', 'delivered_at' => 0);
+
+    $db = new FeedPublisherWebhookDb;
+    $db->deliveries[1] = array_merge(array('id' => 1), $base);
+    $sent = array();
+    $success = function ($target, $content) use (&$sent) {
+        $sent = array($target, $content);
+        return array('ok' => true, 'status' => 200, 'retry_after' => 0);
+    };
+    $result = feedpublisher_webhook_dispatch($feed, 5, $success);
+    $t->assertSame(array('delivered' => 1, 'failed' => 0), $result);
+    $t->assertSame('delivered', $db->deliveries[1]['state']);
+    $t->assertSame($url, $sent[0]);
+    $t->assertContains('showthread.php?tid=42', $sent[1]);
+
+    $db = new FeedPublisherWebhookDb;
+    $db->deliveries[2] = array_merge(array('id' => 2), $base);
+    $limited = function () { return array('ok' => false, 'status' => 429, 'retry_after' => 7); };
+    $result = feedpublisher_webhook_dispatch($feed, 5, $limited);
+    $t->assertSame(array('delivered' => 0, 'failed' => 1), $result);
+    $t->assertSame('queued', $db->deliveries[2]['state']);
+    $t->assertSame(1, $db->deliveries[2]['attempts']);
+    $t->assertSame(TIME_NOW + 7, $db->deliveries[2]['next_attempt_at']);
+    $t->assertContains('HTTP 429', $db->deliveries[2]['last_error']);
+    $t->assertSame(42, $db->deliveries[2]['tid']);
+});
 
 $suite->test('feed names can be generated safely from URLs', function ($t) {
     $t->assertSame(
@@ -477,18 +721,38 @@ $suite->test('full-text planning applies fallback and defers beyond the request 
     $skipped = feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
     $t->assertSame('skipped', $skipped[0]['state']);
     $feed['fulltext_fallback'] = 'retry_skip';
-    $feed['fetch_failures'] = 2;
-    $t->expectException('FeedPublisherException', function () use ($feed, $plan) {
-        feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
-    });
-    $feed['fetch_failures'] = 3;
-    $retrySkipped = feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
-    $t->assertSame('skipped', $retrySkipped[0]['state']);
-    $t->assertContains('Retry limit reached', $retrySkipped[0]['item']['_fulltext']['message']);
+    $retryScheduled = feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
+    $t->assertSame('deferred_fulltext', $retryScheduled[0]['state']);
+    $t->assertSame('retry-scheduled', $retryScheduled[0]['item']['_fulltext']['status']);
     $feed['fulltext_fallback'] = 'retry';
-    $t->expectException('FeedPublisherException', function () use ($feed, $plan) {
-        feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
-    });
+    $retryForever = feedpublisher_fulltext_prepare_plan($feed, array($plan[0]));
+    $t->assertSame('deferred_fulltext', $retryForever[0]['state']);
+});
+
+$suite->test('full-text retries are isolated per entry and exhaust after three retries', function ($t) {
+    global $db;
+    $db = new FeedPublisherRetryDb;
+    $feed = array('id' => 9, 'identity_strategy' => 'guid_link', 'fulltext_mode' => 'always',
+        'fulltext_fallback' => 'retry_skip', 'fulltext_summary_chars' => 600, 'fulltext_max_per_run' => 2);
+    $plan = array(
+        array('state' => 'queued', 'item' => array('key' => 'one', 'title' => 'One', 'url' => 'javascript:one', 'content' => 'Summary one')),
+        array('state' => 'queued', 'item' => array('key' => 'two', 'title' => 'Two', 'url' => 'javascript:two', 'content' => 'Summary two')),
+    );
+    $first = feedpublisher_fulltext_prepare_plan($feed, $plan);
+    $t->assertSame('deferred_fulltext', $first[0]['state']);
+    $t->assertSame('deferred_fulltext', $first[1]['state']);
+    $t->assertSame(2, count($db->retries));
+    $keys = array_keys($db->retries);
+    for ($attempt = 2; $attempt <= 4; ++$attempt) {
+        $db->retries[$keys[0]]['next_attempt_at'] = TIME_NOW;
+        $result = feedpublisher_fulltext_prepare_plan($feed, $plan);
+    }
+    $t->assertSame('skipped', $result[0]['state']);
+    $t->assertSame('retry-exhausted', $result[0]['item']['_fulltext']['status']);
+    $t->assertSame(1, count($db->retries));
+    $remaining = reset($db->retries);
+    $t->assertSame(1, $remaining['attempts']);
+    $t->assertSame((int) $remaining['next_attempt_at'], feedpublisher_fulltext_next_retry_at(9));
 });
 
 $suite->test('full-text URL rewriting is bounded, validated, and preserves the original identity', function ($t) {
@@ -750,16 +1014,42 @@ $suite->test('unsafe HTML is removed before MyCode conversion', function ($t) {
     $t->assertContains('[url=https://example.com/good]good link[/url]', $mycode);
 });
 
+$suite->test('feed HTML resolves relative URLs, removes hidden text, and spaces body images', function ($t) {
+    if (!extension_loaded('dom')) { $t->skip('PHP DOM is not installed.'); }
+    $html = file_get_contents(__DIR__ . '/fixtures/relative-embedded.html');
+    $cleaned = feedpublisher_cleanup_html($html, array(), 'https://example.com/news/articles/story.html');
+    $mycode = feedpublisher_html_to_mycode($cleaned);
+    $t->assertContains('[url=https://example.com/news/source?q=1#details]source', $mycode);
+    $t->assertContains("[img]https://example.com/images/photo.jpg[/img]\n\nFollowing text", $mycode);
+    $t->assertNotContains('lightboxConfig', $mycode);
+    $t->assertNotContains('hidden style text', $mycode);
+    $t->assertSame(array(), feedpublisher_suspicious_output_warnings($mycode));
+    $warnings = feedpublisher_suspicious_output_warnings('http://thread-123.html lightbox config={x:1} <script>');
+    $t->assertSame(3, count($warnings));
+});
+
 $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $source = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher.php');
     $adminSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/admin.php');
     $publisherSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/publisher.php');
     $queueSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
-    $t->assertContains("'version' => '1.0.5'", $source);
+    $operationsSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/operations.php');
+    $t->assertContains("'version' => '1.0.6'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
+    $t->assertContains("feedpublisher_install_fulltext_retries_table", $source);
+    $t->assertContains("drop_table('feedpublisher_fulltext_retries')", $source);
+    $t->assertContains("feedpublisher_install_webhook_queue_table", $source);
+    $t->assertContains("drop_table('feedpublisher_webhook_queue')", $source);
+    $t->assertNotContains('discord_webhook_url', implode(',', feedpublisher_portability_config_fields()));
+    $webhookSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/webhook.php');
+    $t->assertContains("'allowed_mentions' => array('parse' => array())", $webhookSource);
+    $t->assertContains("CURLOPT_PROXY => ''", $webhookSource);
+    $t->assertContains('?wait=true', $webhookSource);
+    $t->assertContains("'test_webhook'", $adminSource);
+    $t->assertContains('Discord confirmed the test message.', $adminSource);
     $t->assertContains("feedpublisher_install_logs_table", $source);
     $t->assertContains("'disposition'", $source);
     $t->assertContains("'publication_mode'", $source);
@@ -785,6 +1075,12 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $t->assertContains("'url' => 'f.url'", $adminSource);
     $t->assertContains("'forum' => 'fo.name'", $adminSource);
     $t->assertContains("feedpublisher_admin_sort_link('Name'", $adminSource);
+    $t->assertContains("name=\"confirm_really\"", $adminSource);
+    $t->assertContains("name=\"confirm_last_chance\"", $adminSource);
+    $t->assertContains("'publishing_paused' => 1", $adminSource);
+    $t->assertContains('function feedpublisher_delete_feed_threads', $operationsSource);
+    $t->assertContains('delete_thread($tid)', $operationsSource);
+    $t->assertContains("array('tid' => 0, 'pid' => 0)", $operationsSource);
 });
 
 $suite->test('documentation covers deployment and known safety limits', function ($t) {
