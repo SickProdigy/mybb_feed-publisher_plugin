@@ -490,7 +490,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
         'fulltext_url_replacement' => '',
         'fulltext_summary_chars' => 600,
         'fulltext_max_per_run' => 3,
-        'ai_enabled' => 0, 'ai_endpoint' => '', 'ai_api_key' => '', 'ai_model' => '', 'ai_prompt' => '', 'ai_timeout_seconds' => 20, 'ai_max_tokens' => 2048, 'ai_max_per_run' => 3, 'ai_json_mode' => 1, 'ai_no_think' => 0,
+        'ai_enabled' => 0, 'ai_endpoint' => '', 'ai_api_key' => '', 'ai_model' => '', 'ai_prompt' => '', 'ai_timeout_seconds' => 20, 'ai_max_tokens' => 2048, 'ai_max_per_run' => 3, 'ai_json_mode' => 1, 'ai_no_think' => 0, 'ai_mode' => 'replace',
         'discord_enabled' => 0,
         'discord_webhook_url' => '',
         'discord_message_template' => "{title}\n{thread_url}",
@@ -585,6 +585,7 @@ function feedpublisher_admin_form($action, $values = array(), $errors = array(),
 
     $container = new FormContainer('Optional AI cleanup');
     $container->output_row('AI cleanup', 'Disabled by default. When enabled, each new entry title and cleaned body are sent to the configured provider before queueing. Provider failures keep the deterministic result.', $form->generate_check_box('ai_enabled', 1, 'Send entry content to an OpenAI-compatible provider', array('checked' => !empty($values['ai_enabled']))));
+    $container->output_row('AI handling', 'Replace uses validated output automatically. Review-only preserves deterministic content and holds the separate AI suggestion for administrator approval.', $form->generate_select_box('ai_mode', array('replace'=>'Replace after validation','review'=>'Review suggestion before publishing'), $values['ai_mode']));
     $container->output_row('Endpoint', 'OpenAI-compatible chat-completions URL. HTTP is allowed for an administrator-configured local llama.cpp server; use HTTPS for remote providers.', $form->generate_text_box('ai_endpoint', $values['ai_endpoint'], array('maxlength' => 2048, 'placeholder' => 'http://server:8080/v1/chat/completions')));
     $savedAiKey = !empty($values['id']) && !empty($values['ai_api_key']);
     $container->output_row('API key', 'Optional for llama.cpp. Saved keys are masked and excluded from exports and logs. Leave blank while editing to keep the saved key.', $form->generate_password_box('ai_api_key', '', array('autocomplete' => 'new-password', 'placeholder' => $savedAiKey ? 'Saved - leave blank to keep' : 'Optional')));
@@ -843,6 +844,7 @@ function feedpublisher_admin_save()
         'ai_timeout_seconds' => $mybb->get_input('ai_timeout_seconds', MyBB::INPUT_INT), 'ai_max_tokens' => $mybb->get_input('ai_max_tokens', MyBB::INPUT_INT),
         'ai_max_per_run' => $mybb->get_input('ai_max_per_run', MyBB::INPUT_INT),
         'ai_json_mode' => $mybb->get_input('ai_json_mode', MyBB::INPUT_INT) ? 1 : 0, 'ai_no_think' => $mybb->get_input('ai_no_think', MyBB::INPUT_INT) ? 1 : 0,
+        'ai_mode' => $mybb->get_input('ai_mode'),
         'discord_enabled' => $mybb->get_input('discord_enabled', MyBB::INPUT_INT) ? 1 : 0,
         'discord_webhook_url' => trim($mybb->get_input('discord_webhook_url')),
         'discord_message_template' => $mybb->get_input('discord_message_template'),
@@ -1004,6 +1006,7 @@ function feedpublisher_admin_save()
     if ($values['fulltext_max_per_run'] < 1 || $values['fulltext_max_per_run'] > 10) $errors[] = 'Full-article fetches per run must be between 1 and 10.';
     if ($values['ai_api_key'] === '' && $currentFeed) $values['ai_api_key'] = $currentFeed['ai_api_key'];
     foreach (feedpublisher_ai_config_errors($values) as $aiError) $errors[] = $aiError;
+    if (!in_array($values['ai_mode'], array('replace','review'), true)) $errors[] = 'Select a valid AI handling mode.';
     if ($values['ai_max_per_run'] < 1 || $values['ai_max_per_run'] > 10) $errors[] = 'AI requests per run must be between 1 and 10.';
     $ruleErrors = array();
     feedpublisher_eligibility_rules($values['eligibility_rules'], $ruleErrors);
@@ -1120,6 +1123,7 @@ function feedpublisher_admin_save()
         'ai_prompt' => $db->escape_string($values['ai_prompt']), 'ai_timeout_seconds' => $values['ai_timeout_seconds'], 'ai_max_tokens' => $values['ai_max_tokens'],
         'ai_max_per_run' => $values['ai_max_per_run'],
         'ai_json_mode' => $values['ai_json_mode'], 'ai_no_think' => $values['ai_no_think'],
+        'ai_mode' => $db->escape_string($values['ai_mode']),
         'discord_enabled' => $values['discord_enabled'],
         'discord_webhook_url' => $db->escape_string($values['discord_webhook_url']),
         'discord_message_template' => $db->escape_string($values['discord_message_template']),
@@ -1432,7 +1436,7 @@ function feedpublisher_admin_moderation()
     echo '<p>These entries were prepared during discovery and are not fetched again for review. Approval returns an entry to the normal paced publishing queue; it does not bypass forum permissions, deduplication reservations, or publication validation.</p>';
     if ($deferred) echo '<p><strong>' . $deferred . '</strong> future-dated or deferred entries will appear when their review time arrives.</p>';
 
-    $query = $db->write_query('SELECT q.id AS queue_id,q.feed_id,q.title,q.source_url,q.raw_content,q.content,q.source_published,q.discovered_at,q.media_json,'
+    $query = $db->write_query('SELECT q.id AS queue_id,q.feed_id,q.title,q.source_url,q.raw_content,q.content,q.source_published,q.discovered_at,q.media_json,q.ai_status,q.ai_model AS queue_ai_model,q.ai_message,q.ai_title,q.ai_content,'
         . 'f.* FROM ' . TABLE_PREFIX . 'feedpublisher_queue q INNER JOIN ' . TABLE_PREFIX . 'feedpublisher_feeds f ON (f.id=q.feed_id) '
         . "WHERE q.state='pending_approval' AND q.available_at<=" . TIME_NOW . ' ORDER BY q.discovered_at ASC,q.id ASC LIMIT 100');
     $shown = 0;
@@ -1443,12 +1447,18 @@ function feedpublisher_admin_moderation()
         $previewItem = $item;
         $previewItem['media'] = $media;
         $post = feedpublisher_compose_post($item, $previewItem);
+        $aiPost = array();
+        if (!empty($item['ai_title']) && !empty($item['ai_content'])) {
+            $aiItem = $previewItem; $aiItem['title'] = $item['ai_title']; $aiItem['content'] = $item['ai_content'];
+            $aiPost = feedpublisher_compose_post($item, $aiItem);
+        }
         $removed = max(0, strlen($item['raw_content']) - strlen($item['content']));
         echo '<details' . ($shown === 1 ? ' open' : '') . ' style="margin:0 0 12px;border:1px solid #bbb;padding:8px">'
             . '<summary><strong>' . htmlspecialchars_uni($item['name']) . '</strong> &mdash; ' . htmlspecialchars_uni($post['title']) . '</summary>'
             . '<div style="padding:10px"><p><strong>Source:</strong> <a href="' . htmlspecialchars_uni($item['source_url']) . '" target="_blank" rel="noopener noreferrer">' . htmlspecialchars_uni($item['source_url']) . '</a><br>'
             . '<strong>Prepared:</strong> ' . my_date('normal', (int) $item['discovered_at']) . '<br>'
             . '<strong>Cleanup:</strong> source ' . strlen($item['raw_content']) . ' bytes; prepared ' . strlen($item['content']) . ' bytes; removed ' . $removed . ' bytes<br>'
+            . '<strong>AI:</strong> ' . htmlspecialchars_uni($item['ai_status'] ?: 'not used') . ($item['queue_ai_model'] ? ' using ' . htmlspecialchars_uni($item['queue_ai_model']) : '') . ($item['ai_message'] ? '<br><small>' . htmlspecialchars_uni($item['ai_message']) . '</small>' : '') . '<br>'
             . '<strong>MyBB prefix:</strong> ' . ((int) $item['thread_prefix_id'] ? 'Prefix #' . (int) $item['thread_prefix_id'] : 'None') . '<br>'
             . '<strong>Media:</strong> ' . feedpublisher_admin_media_preview($media, $item['media_mode'])
             . '<br><strong>Media placement:</strong> ' . ((isset($item['media_position']) && $item['media_position'] === 'top') ? 'Before the body' : 'After the body') . '</p>'
@@ -1459,7 +1469,9 @@ function feedpublisher_admin_moderation()
             . '<p><label><strong>Prepared body</strong><br><textarea name="review_body" style="width:100%;height:220px">' . htmlspecialchars_uni($item['content']) . '</textarea></label></p>'
             . '<p><strong>Final title:</strong> ' . htmlspecialchars_uni($post['title']) . '</p>'
             . '<pre style="white-space:pre-wrap;max-height:24em;overflow:auto;padding:10px;border:1px solid #ccc;background:#f7f7f7">' . htmlspecialchars_uni($post['body']) . '</pre>'
+            . ($aiPost ? '<h3>Validated AI suggestion</h3><p><strong>Final title:</strong> ' . htmlspecialchars_uni($aiPost['title']) . '</p><pre style="white-space:pre-wrap;max-height:24em;overflow:auto;padding:10px;border:1px solid #8ab;background:#f3faff">' . htmlspecialchars_uni($aiPost['body']) . '</pre>' : '')
             . '<p><button class="button" type="submit" name="decision" value="approve">Approve original</button> '
+            . (!empty($item['ai_title']) && !empty($item['ai_content']) ? '<button class="button" type="submit" name="decision" value="approve_ai">Approve AI suggestion</button> ' : '')
             . '<button class="button" type="submit" name="decision" value="edit_approve">Save edits and approve</button> '
             . '<button class="button" type="submit" name="decision" value="defer">Defer 24 hours</button> '
             . '<button class="button" type="submit" name="decision" value="reject" onclick="return confirm(\'Reject this entry permanently?\')">Reject permanently</button></p></form></div></details>';
@@ -1482,8 +1494,15 @@ function feedpublisher_admin_moderate_commit()
         flash_message('The review entry no longer exists or has already been handled.', 'error');
         admin_redirect('index.php?module=config/feedpublisher&action=moderation');
     }
-    if ($decision === 'approve' || $decision === 'edit_approve') {
-        $update = array('state' => 'queued', 'last_error' => '', 'claim_token' => '', 'claimed_at' => 0);
+    if ($decision === 'approve' || $decision === 'edit_approve' || $decision === 'approve_ai') {
+        $update = array('state' => 'queued', 'last_error' => '', 'claim_token' => '', 'claimed_at' => 0, 'ai_title' => '', 'ai_content' => '');
+        if ($decision === 'approve_ai') {
+            if (empty($item['ai_title']) || empty($item['ai_content'])) {
+                flash_message('This entry has no validated AI suggestion to approve.', 'error');
+                admin_redirect('index.php?module=config/feedpublisher&action=moderation');
+            }
+            $update['title'] = $db->escape_string($item['ai_title']); $update['content'] = $db->escape_string($item['ai_content']); $update['ai_status'] = 'approved';
+        }
         if ($decision === 'edit_approve') {
             $title = trim($mybb->get_input('review_title'));
             $body = trim($mybb->get_input('review_body'));
@@ -1493,9 +1512,11 @@ function feedpublisher_admin_moderate_commit()
             }
             $update['title'] = $db->escape_string($title);
             $update['content'] = $db->escape_string($body);
+            $update['ai_status'] = 'edited';
         }
+        if ($decision === 'approve' && $item['ai_status'] === 'suggested') $update['ai_status'] = 'original';
         $db->update_query('feedpublisher_queue', $update, 'id=' . $queueId . " AND state='pending_approval'");
-        $message = $decision === 'edit_approve' ? 'The edited entry was approved for paced publication.' : 'The entry was approved for paced publication.';
+        $message = $decision === 'edit_approve' ? 'The edited entry was approved for paced publication.' : ($decision === 'approve_ai' ? 'The validated AI suggestion was approved for paced publication.' : 'The entry was approved for paced publication.');
     } elseif ($decision === 'defer') {
         $db->update_query('feedpublisher_queue', array('available_at' => max(TIME_NOW, (int) $item['available_at']) + 86400),
             'id=' . $queueId . " AND state='pending_approval'");

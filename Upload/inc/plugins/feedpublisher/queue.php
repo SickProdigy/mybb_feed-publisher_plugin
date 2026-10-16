@@ -92,6 +92,7 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
     if ($state === 'queued' && isset($feed['publication_mode']) && $feed['publication_mode'] === 'approval') {
         $state = 'pending_approval';
     }
+    if ($state === 'queued' && !empty($feed['ai_enabled']) && isset($feed['ai_mode']) && $feed['ai_mode'] === 'review') $state = 'pending_approval';
     $queued = (int) $db->fetch_field($db->simple_select(
         'feedpublisher_queue',
         'COUNT(id) AS total',
@@ -101,10 +102,12 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
         return 'full';
     }
     $prepared = in_array($state, array('queued', 'pending_approval'), true) ? feedpublisher_prepare_item($feed, $item) : null;
-    $aiMessage = '';
+    $aiMessage = ''; $aiStatus = ''; $aiTitle = ''; $aiContent = '';
     if ($prepared && function_exists('feedpublisher_ai_apply')) {
         $candidate = $item; $candidate['content'] = $prepared['content']; $ai = feedpublisher_ai_apply($feed, $candidate);
-        $item['title'] = $ai['item']['title']; $prepared['content'] = $ai['item']['content']; $aiMessage = $ai['message'];
+        $aiMessage = $ai['message']; $aiStatus = $ai['applied'] ? 'applied' : 'fallback';
+        if ($ai['applied'] && isset($feed['ai_mode']) && $feed['ai_mode'] === 'review') { $aiStatus = 'suggested'; $aiTitle = $ai['item']['title']; $aiContent = $ai['item']['content']; }
+        else { $item['title'] = $ai['item']['title']; $prepared['content'] = $ai['item']['content']; }
     }
 
     $record = array(
@@ -116,6 +119,8 @@ function feedpublisher_queue_stage($feed, $item, $state = 'queued')
         'media_json' => in_array($state, array('queued', 'pending_approval'), true) ? $db->escape_string(json_encode(isset($item['media']) ? array_slice($item['media'], 0, 10) : array())) : '',
         'raw_content' => in_array($state, array('queued', 'pending_approval'), true) ? $db->escape_string($item['content']) : '',
         'content' => in_array($state, array('queued', 'pending_approval'), true) ? $db->escape_string($prepared['content']) : '',
+        'ai_status' => $db->escape_string($aiStatus), 'ai_model' => $db->escape_string(!empty($feed['ai_enabled']) ? my_substr($feed['ai_model'], 0, 200) : ''),
+        'ai_message' => $db->escape_string(substr($aiMessage, 0, 1000)), 'ai_title' => $db->escape_string(my_substr($aiTitle, 0, 255)), 'ai_content' => $db->escape_string($aiContent),
         'source_published' => $datePlan['source_time'],
         'discovered_at' => TIME_NOW,
         'available_at' => in_array($state, array('queued', 'pending_approval'), true) ? $datePlan['available_at'] : TIME_NOW,

@@ -22,7 +22,7 @@ function feedpublisher_info()
         'website' => 'https://github.com/sickprodigy/mybb_feed-publisher_plugin',
         'author' => 'SickProdigy',
         'authorsite' => 'https://www.sickgaming.net',
-        'version' => '1.0.8',
+        'version' => '1.0.9',
         'compatibility' => '18*',
         'codename' => 'feedpublisher',
     );
@@ -86,6 +86,7 @@ function feedpublisher_install()
             `ai_max_per_run` tinyint unsigned NOT NULL DEFAULT 3,
             `ai_json_mode` tinyint(1) NOT NULL DEFAULT 1,
             `ai_no_think` tinyint(1) NOT NULL DEFAULT 0,
+            `ai_mode` varchar(12) NOT NULL DEFAULT 'replace',
             `discord_enabled` tinyint(1) NOT NULL DEFAULT 0,
             `discord_webhook_url` varchar(512) NOT NULL DEFAULT '',
             `discord_message_template` varchar(2000) NOT NULL DEFAULT '{title}\n{thread_url}',
@@ -186,6 +187,7 @@ function feedpublisher_upgrade_schema()
         'ai_max_per_run' => "tinyint unsigned NOT NULL DEFAULT 3 AFTER `ai_max_tokens`",
         'ai_json_mode' => "tinyint(1) NOT NULL DEFAULT 1 AFTER `ai_max_per_run`",
         'ai_no_think' => "tinyint(1) NOT NULL DEFAULT 0 AFTER `ai_json_mode`",
+        'ai_mode' => "varchar(12) NOT NULL DEFAULT 'replace' AFTER `ai_no_think`",
         'discord_enabled' => "tinyint(1) NOT NULL DEFAULT 0 AFTER `fulltext_max_per_run`",
         'discord_webhook_url' => "varchar(512) NOT NULL DEFAULT '' AFTER `discord_enabled`",
         'discord_message_template' => "varchar(2000) NOT NULL DEFAULT '{title}\\n{thread_url}' AFTER `discord_webhook_url`",
@@ -225,6 +227,9 @@ function feedpublisher_upgrade_schema()
     if ($db->table_exists('feedpublisher_queue') && !$db->field_exists('media_json', 'feedpublisher_queue')) {
         $db->add_column('feedpublisher_queue', 'media_json', "text NULL AFTER author");
     }
+    $queueAiColumns = array('ai_status' => "varchar(16) NOT NULL DEFAULT '' AFTER content", 'ai_model' => "varchar(200) NOT NULL DEFAULT '' AFTER ai_status",
+        'ai_message' => "varchar(1000) NOT NULL DEFAULT '' AFTER ai_model", 'ai_title' => "varchar(255) NOT NULL DEFAULT '' AFTER ai_message", 'ai_content' => "mediumtext NULL AFTER ai_title");
+    foreach ($queueAiColumns as $name => $definition) if ($db->table_exists('feedpublisher_queue') && !$db->field_exists($name, 'feedpublisher_queue')) $db->add_column('feedpublisher_queue', $name, $definition);
 
     if (!$db->table_exists('feedpublisher_queue')) {
         $collation = $db->build_create_table_collation();
@@ -238,6 +243,11 @@ function feedpublisher_upgrade_schema()
             `media_json` text NULL,
             `raw_content` mediumtext NOT NULL,
             `content` mediumtext NOT NULL,
+            `ai_status` varchar(16) NOT NULL DEFAULT '',
+            `ai_model` varchar(200) NOT NULL DEFAULT '',
+            `ai_message` varchar(1000) NOT NULL DEFAULT '',
+            `ai_title` varchar(255) NOT NULL DEFAULT '',
+            `ai_content` mediumtext NULL,
             `source_published` int unsigned NOT NULL DEFAULT 0,
             `discovered_at` int unsigned NOT NULL,
             `available_at` int unsigned NOT NULL DEFAULT 0,

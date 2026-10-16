@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.9 - 2026-10-16
+
+- Store bounded non-secret AI outcome, model, and message metadata with each queued entry.
+- Add review-only AI handling that preserves deterministic content, separately stores validated suggestions, and requires administrator approval before publication.
+
 ## 1.0.8 - 2026-10-16
 
 - Reject AI output that introduces any URL absent from deterministic content or contains an unsafe URL.

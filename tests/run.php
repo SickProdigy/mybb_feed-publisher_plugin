@@ -1036,7 +1036,7 @@ $suite->test('lifecycle and upgrade guards remain present', function ($t) {
     $queueSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php');
     $t->assertContains("if (!\$db->table_exists('feedpublisher_feeds'))", $source);
     $operationsSource = file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/operations.php');
-    $t->assertContains("'version' => '1.0.8'", $source);
+    $t->assertContains("'version' => '1.0.9'", $source);
     $t->assertContains("if (!\$db->field_exists(\$name, 'feedpublisher_feeds'))", $source);
     $t->assertContains("file='feedpublisher'", $source);
     $t->assertContains("drop_table('feedpublisher_queue')", $source);
@@ -1101,6 +1101,8 @@ $suite->test('AI cleanup is optional, bounded, strictly validated, and falls bac
     $t->assertSame(array('title'=>'Fenced','body'=>'Body'), feedpublisher_ai_validate_result(feedpublisher_ai_json_content("```json\n{\"title\":\"Fenced\",\"body\":\"Body\"}\n```")));
     $t->expectException('RuntimeException', function(){feedpublisher_ai_validate_result(array('title'=>'Injected','body'=>'[url=https://evil.example]bad[/url]'),'Original');});
     $t->assertContains("'test_ai'", file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/admin.php'));
+    $t->assertContains("value=\"approve_ai\"", file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/admin.php'));
+    $t->assertContains("'ai_status' =>", file_get_contents(__DIR__ . '/../Upload/inc/plugins/feedpublisher/queue.php'));
 });
 
 $suite->test('documentation covers deployment and known safety limits', function ($t) {

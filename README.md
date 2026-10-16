@@ -227,6 +227,8 @@ The provider receives the entry title, cleaned body, and configured per-feed ins
 
 AI output may reuse only HTTP(S) URLs already present in the deterministic input; newly invented or unsafe URLs reject the entire AI result. The Operations page can send a confirmed synthetic connection test. Reasoning models can use the no-thinking option, while JSON response mode can be disabled for compatible servers that do not implement `response_format`.
 
+AI handling can either replace prepared content after validation or operate in review-only mode. Review-only entries are held in the normal moderation queue with deterministic and AI-composed results displayed separately. The administrator can approve the original, approve the validated suggestion, edit the deterministic version, defer, or reject. Queue rows record only bounded status, model alias, and outcome text alongside any pending suggestionnever the API key or raw provider response.
+
 An opt-in command-line probe is also available and is not part of the normal test suite:
 
 ```sh
